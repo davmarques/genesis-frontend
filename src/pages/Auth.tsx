@@ -27,10 +27,12 @@ export default function AuthPage() {
     e.preventDefault();
     setIsLoading(true);
 
+    const cleanEmail = email.toLowerCase().trim();
+
     try {
       // 1. Tentar login via Supabase Auth
       const { data: authData, error } = await supabase.auth.signInWithPassword({
-        email,
+        email: cleanEmail,
         password,
       });
 
@@ -72,11 +74,11 @@ export default function AuthPage() {
         const { data: dbUser } = await supabase
           .from('users')
           .select('unidade_id, setor_id, role, name')
-          .eq('email', email)
+          .eq('email', cleanEmail)
           .single();
 
         // Mapear role
-        let userRole = dbUser?.role || metadata?.role || (email.includes('admin') ? 'pmo' : 'coordinator');
+        let userRole = dbUser?.role || metadata?.role || (cleanEmail.includes('admin') ? 'pmo' : 'coordinator');
         if (userRole === 'manager') userRole = 'coordinator';
         
         const userData = {
@@ -107,11 +109,12 @@ export default function AuthPage() {
         return;
       }
     } catch (error: any) {
+      console.warn("Supabase auth failed, trying backend fallback...", error.message);
       // 2. Fallback para Demo ou Backend Local se Supabase falhar
       try {
         const data = await apiFetch("/auth/login", {
           method: "POST",
-          body: JSON.stringify({ email, password }),
+          body: JSON.stringify({ email: cleanEmail, password }),
         });
 
         if (data.user.needsPasswordReset) {
@@ -140,10 +143,11 @@ export default function AuthPage() {
         });
         navigate("/dashboard");
         return;
-      } catch (apiError) {
+      } catch (apiError: any) {
+        console.error("Backend auth also failed:", apiError.message);
         // 3. Fallback final para admin123 (Desenvolvimento)
         // Se usar a senha padrão, mesmo no mock, pedimos reset
-        if (email === "admin@genesis.com" && password === "admin123") {
+        if (cleanEmail === "admin@genesis.com" && password === "admin123") {
           setIsLocalAuth(true);
           setMustResetPassword(true);
           toast({
@@ -157,7 +161,7 @@ export default function AuthPage() {
         toast({
           variant: "destructive",
           title: "Erro no Login",
-          description: error.message || "Credenciais inválidas.",
+          description: apiError.message || error.message || "Credenciais inválidas.",
         });
       }
     } finally {

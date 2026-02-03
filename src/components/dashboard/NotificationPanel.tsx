@@ -141,22 +141,51 @@ export const NotificationPanel = ({ role: componentRole }: NotificationPanelProp
     }
   };
 
+  const handleUpdateStatus = async (id: string, newStatus: string) => {
+    try {
+      const { error } = await supabase
+        .from('notificacoes')
+        .update({ status: newStatus })
+        .eq('id', id);
+
+      if (error) throw error;
+      
+      const statusLabels: Record<string, string> = {
+        accepted: "reconhecida",
+        disputed: "contestada",
+        approved: "aprovada",
+        rejected: "rejeitada"
+      };
+
+      await fetchNotifications();
+    } catch (error: any) {
+      console.error("Erro ao atualizar status:", error);
+    }
+  };
+
+  const statusMap: Record<string, string> = {
+    pending: "Pendente",
+    disputed: "Contestada",
+    accepted: "Aceita",
+    approved: "Aprovada",
+    rejected: "Rejeitada"
+  };
+
   const getStatusBadge = (status: string) => {
-    switch (status) {
+    const s = status?.toLowerCase() || "pending";
+    switch (s) {
       case "pending":
       case "pendente":
         return <Badge variant="outline" className="bg-warning/10 text-warning border-warning/30">Pendente</Badge>;
       case "disputed":
       case "contestada":
-        return <Badge variant="outline" className="bg-blue-500/10 text-blue-500 border-blue-500/30">Contestada</Badge>;
+        return <Badge variant="outline" className="bg-destructive/10 text-destructive border-destructive/30">Contestada</Badge>;
       case "accepted":
       case "aceita":
+      case "approved":
         return <Badge variant="outline" className="bg-success/10 text-success border-success/30">Aceita</Badge>;
-      case "judged":
-      case "julgada":
-        return <Badge variant="outline" className="bg-purple-500/10 text-purple-500 border-purple-500/30">Julgada</Badge>;
       default:
-        return <Badge variant="outline">{status}</Badge>;
+        return <Badge variant="outline">{statusMap[s] || s}</Badge>;
     }
   };
 
@@ -227,6 +256,48 @@ export const NotificationPanel = ({ role: componentRole }: NotificationPanelProp
                       {formatTimestamp(notification.timestamp)}
                     </span>
                     <div className="flex items-center gap-2">
+                      {notification.status === "pending" && 
+                       notification.toSector?.trim().toLowerCase() === userSector.trim().toLowerCase() && (
+                        <div className="flex gap-1">
+                          <Button 
+                            size="sm" 
+                            variant="outline" 
+                            className="h-7 text-[10px] text-success border-success/30 hover:bg-success/10 px-2"
+                            onClick={(e) => { e.stopPropagation(); handleUpdateStatus(notification.id, "accepted"); }}
+                          >
+                            Reconhecer
+                          </Button>
+                          <Button 
+                            size="sm" 
+                            variant="outline" 
+                            className="h-7 text-[10px] text-destructive border-destructive/30 hover:bg-destructive/10 px-2"
+                            onClick={(e) => { e.stopPropagation(); handleUpdateStatus(notification.id, "disputed"); }}
+                          >
+                            Contestar
+                          </Button>
+                        </div>
+                      )}
+                      {notification.status === "disputed" && role === "pmo" && (
+                        <div className="flex gap-1">
+                          <Button 
+                            size="sm" 
+                            variant="outline" 
+                            className="h-7 text-[10px] text-success border-success/30 hover:bg-success/10 px-2"
+                            onClick={(e) => { e.stopPropagation(); handleUpdateStatus(notification.id, "accepted"); }}
+                          >
+                            Aprovar
+                          </Button>
+                          <Button 
+                            size="sm" 
+                            variant="outline" 
+                            className="h-7 text-[10px] text-destructive border-destructive/30 hover:bg-destructive/10 px-2"
+                            onClick={(e) => { e.stopPropagation(); handleUpdateStatus(notification.id, "rejected"); }}
+                          >
+                            Rejeitar
+                          </Button>
+                        </div>
+                      )}
+                      
                       {notification.has_evidence && (
                         <Badge variant="outline" className="text-[9px] gap-1 bg-blue-500/5 text-blue-500 border-blue-500/20">
                           <LinkIcon className="w-2.5 h-2.5" />

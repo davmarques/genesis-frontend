@@ -253,10 +253,35 @@ export default function Notifications() {
     toSector: n.setor?.nome,
     unidade: n.unidade?.nome,
     errorType: n.notified ? "alert" : "absence",
-    status: "pending",
+    status: n.status || "pending",
     points: n.notified ? -50 : -100,
     uploadUrl: n.upload_url
   }));
+
+  const handleUpdateStatus = async (id: string, newStatus: string) => {
+    try {
+      const dbId = id.replace('db-', '');
+      const { error } = await supabase
+        .from('notificacoes')
+        .update({ status: newStatus })
+        .eq('id', dbId);
+
+      if (error) throw error;
+      
+      const statusLabels: Record<string, string> = {
+        accepted: "reconhecida",
+        disputed: "contestada",
+        approved: "aprovada",
+        rejected: "rejeitada"
+      };
+
+      toast.success(`Notificação ${statusLabels[newStatus] || newStatus} com sucesso!`);
+      await fetchNotifications(sectors);
+    } catch (error: any) {
+      console.error("Erro ao atualizar status:", error);
+      toast.error("Erro ao atualizar status: " + error.message);
+    }
+  };
 
   const allNotifications = [...mockNotifications, ...mappedNotifications];
 
@@ -359,6 +384,7 @@ export default function Notifications() {
             notified: errorType === "alert", // Sim -> true, Não -> false
             description: errorDescription,
             upload_url: uploadUrl,
+            status: 'pending',
             created_at: new Date().toISOString(), // Enviar explicitamente em UTC
             id_setor_ref: creatorSectorId,
             id_unidade_ref: creatorUnidadeId
@@ -773,22 +799,43 @@ export default function Notifications() {
                           </div>
                         </div>
                         <div className="flex items-center gap-2">
-                          {notification.status === "pending" && role !== "pmo" && (
+                          {notification.status === "pending" && 
+                           notification.toSector?.trim().toLowerCase() === userSector.trim().toLowerCase() && (
                             <>
-                              <Button size="sm" variant="outline" className="text-success border-success/30 hover:bg-success/10">
+                              <Button 
+                                size="sm" 
+                                variant="outline" 
+                                className="text-success border-success/30 hover:bg-success/10"
+                                onClick={() => handleUpdateStatus(notification.id, "accepted")}
+                              >
                                 Reconhecer
                               </Button>
-                              <Button size="sm" variant="outline" className="text-destructive border-destructive/30 hover:bg-destructive/10">
+                              <Button 
+                                size="sm" 
+                                variant="outline" 
+                                className="text-destructive border-destructive/30 hover:bg-destructive/10"
+                                onClick={() => handleUpdateStatus(notification.id, "disputed")}
+                              >
                                 Contestar
                               </Button>
                             </>
                           )}
                           {notification.status === "disputed" && role === "pmo" && (
                             <>
-                              <Button size="sm" variant="outline" className="text-success border-success/30 hover:bg-success/10">
+                              <Button 
+                                size="sm" 
+                                variant="outline" 
+                                className="text-success border-success/30 hover:bg-success/10"
+                                onClick={() => handleUpdateStatus(notification.id, "accepted")}
+                              >
                                 Aprovar
                               </Button>
-                              <Button size="sm" variant="outline" className="text-destructive border-destructive/30 hover:bg-destructive/10">
+                              <Button 
+                                size="sm" 
+                                variant="outline" 
+                                className="text-destructive border-destructive/30 hover:bg-destructive/10"
+                                onClick={() => handleUpdateStatus(notification.id, "rejected")}
+                              >
                                 Rejeitar
                               </Button>
                             </>

@@ -61,22 +61,22 @@ export const RankingTable = () => {
       const rankingData = sectorsList.map((sector: any, index: number) => {
         const sectorId = sector.id;
         
-        // Sumarizar pontos totais
+        // Sumarizar pontos totais - APENAS notificações aceitas ou concluídas
         const pointsAsAuditor = (notifications || [])
-          .filter(n => n.id_setor_ref === sectorId)
+          .filter(n => n.id_setor_ref === sectorId && (n.status === 'accepted' || n.status === 'approved' || !n.status))
           .length * 50;
         
         const penaltyAsAuditee = (notifications || [])
-          .filter(n => n.setor_id === sectorId)
+          .filter(n => n.setor_id === sectorId && (n.status === 'accepted' || n.status === 'approved' || !n.status))
           .reduce((acc, n) => acc + (n.notified ? -50 : -100), 0);
 
         // Calcular variação mensal (pontos ganhos/perdidos no mês atual)
         const monthlyPointsAsAuditor = (notifications || [])
-          .filter(n => n.id_setor_ref === sectorId && new Date(n.created_at) >= startOfMonth)
+          .filter(n => n.id_setor_ref === sectorId && (n.status === 'accepted' || n.status === 'approved' || !n.status) && new Date(n.created_at) >= startOfMonth)
           .length * 50;
         
         const monthlyPenaltyAsAuditee = (notifications || [])
-          .filter(n => n.setor_id === sectorId && new Date(n.created_at) >= startOfMonth)
+          .filter(n => n.setor_id === sectorId && (n.status === 'accepted' || n.status === 'approved' || !n.status) && new Date(n.created_at) >= startOfMonth)
           .reduce((acc, n) => acc + (n.notified ? -50 : -100), 0);
         
         const monthlyChange = monthlyPointsAsAuditor + monthlyPenaltyAsAuditee;
