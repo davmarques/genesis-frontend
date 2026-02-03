@@ -29,7 +29,7 @@ export const ScoreCard = ({ title, value, icon: Icon, trend, variant = "default"
 
   return (
     <Card className={cn("p-6 bg-gradient-to-br border-2", variantStyles[variant])}>
-      <div className="flex items-start justify-between mb-4">
+      <div className="flex items-start justify-between mb-2">
         <div className="flex-1">
           <p className="text-sm font-medium text-muted-foreground mb-1">{title}</p>
           <p className="text-3xl font-bold text-foreground">{value}</p>
@@ -38,9 +38,6 @@ export const ScoreCard = ({ title, value, icon: Icon, trend, variant = "default"
           <Icon className="w-6 h-6" />
         </div>
       </div>
-      {trend && (
-        <p className="text-xs text-muted-foreground">{trend}</p>
-      )}
     </Card>
   );
 };

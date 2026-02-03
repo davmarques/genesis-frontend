@@ -3,6 +3,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Activity, Users, Trophy, CheckCircle2, AlertTriangle, TrendingUp, Shield, Zap } from "lucide-react";
 import { Link } from "react-router-dom";
+import logo from "../assets/images/genesis-logo.png";
 
 const Index = () => {
   return (
@@ -11,10 +12,9 @@ const Index = () => {
       <header className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-50">
         <div className="container mx-auto px-4 py-4 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-gradient-to-br from-primary to-secondary rounded-lg flex items-center justify-center">
-              <Activity className="w-5 h-5 text-primary-foreground" />
+            <div className="w-52 h-8 rounded-lg flex items-center justify-center">
+              <img src={logo} alt="Gênesis Logo" />
             </div>
-            <span className="text-xl font-bold text-foreground">Gênesis</span>
           </div>
           <Link to="/dashboard">
             <Button variant="default" className="bg-primary hover:bg-primary/90">

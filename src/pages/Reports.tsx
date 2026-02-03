@@ -3,13 +3,30 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { 
+  BarChart, 
+  Bar, 
+  XAxis, 
+  YAxis, 
+  CartesianGrid, 
+  Tooltip, 
+  ResponsiveContainer,
+  LineChart,
+  Line,
+  AreaChart,
+  Area
+} from "recharts";
+import { 
+  ChartContainer, 
+  ChartTooltip, 
+  ChartTooltipContent,
+  type ChartConfig
+} from "@/components/ui/chart";
+import { 
   Download,
   TrendingUp,
-  TrendingDown,
   Activity,
   Target,
   Award,
-  BarChart3,
   Calendar,
   Filter,
   FileText,
@@ -32,12 +49,39 @@ export default function Reports() {
 
   // Mock data for scoring breakdown
   const scoringBreakdown = [
-    { action: "Atividades Validadas", count: 127, points: 1270, type: "positive" },
     { action: "Pontos Vitais (Novas Atividades)", count: 3, points: 300, type: "positive" },
     { action: "Pontos de Auditoria", count: 5, points: 250, type: "positive" },
     { action: "Notificações de Alerta", count: 2, points: -100, type: "negative" },
     { action: "Notificações de Ausência", count: 1, points: -100, type: "negative" },
   ];
+
+  const chartData = [
+    { month: "Jan", points: 2400, tasks: 400 },
+    { month: "Fev", points: 1398, tasks: 300 },
+    { month: "Mar", points: 9800, tasks: 200 },
+    { month: "Abr", points: 3908, tasks: 278 },
+    { month: "Mai", points: 4800, tasks: 189 },
+    { month: "Jun", points: 3800, tasks: 239 },
+  ];
+
+  const sectorData = [
+    { sector: "Oncologia", points: 3845 },
+    { sector: "Faturamento", points: 3720 },
+    { sector: "UTI Adulto", points: 3580 },
+    { sector: "Pediatria", points: 3420 },
+    { sector: "Internação", points: 3210 },
+  ];
+
+  const chartConfig = {
+    points: {
+      label: "Pontuação",
+      color: "hsl(var(--primary))",
+    },
+    tasks: {
+      label: "Tarefas",
+      color: "hsl(var(--secondary))",
+    },
+  } satisfies ChartConfig;
 
   const totalPositive = scoringBreakdown.filter(s => s.type === "positive").reduce((acc, s) => acc + s.points, 0);
   const totalNegative = scoringBreakdown.filter(s => s.type === "negative").reduce((acc, s) => acc + s.points, 0);
@@ -58,7 +102,7 @@ export default function Reports() {
               Filtros
             </Button>
           </div>
-          <Button className="gap-2 bg-primary hover:bg-primary/90">
+          <Button className="gap-2 bg-primary hover:bg-primary/90 text-primary-foreground">
             <Download className="w-4 h-4" />
             Exportar Relatório
           </Button>
@@ -93,7 +137,7 @@ export default function Reports() {
                 +8%
               </Badge>
             </div>
-            <p className="text-sm text-muted-foreground mb-1">Taxa de Conclusão</p>
+            <p className="text-sm text-muted-foreground mb-1">Taxa de Aproveitamento</p>
             <p className="text-3xl font-bold text-foreground">94.2%</p>
             <p className="text-xs text-muted-foreground mt-1">vs. mês anterior</p>
           </Card>
@@ -114,23 +158,6 @@ export default function Reports() {
             </p>
             <p className="text-xs text-muted-foreground mt-1">vs. mês anterior</p>
           </Card>
-
-          <Card className="p-6">
-            <div className="flex items-center justify-between mb-3">
-              <div className="p-2 rounded-lg bg-destructive/10">
-                <BarChart3 className="w-5 h-5 text-destructive" />
-              </div>
-              <Badge variant="outline" className="gap-1 text-destructive border-destructive/30">
-                <TrendingDown className="w-3 h-3" />
-                -5%
-              </Badge>
-            </div>
-            <p className="text-sm text-muted-foreground mb-1">Erros Reportados</p>
-            <p className="text-3xl font-bold text-foreground">
-              {role === "pmo" ? "23" : role === "coordinator" ? "3" : "0"}
-            </p>
-            <p className="text-xs text-muted-foreground mt-1">vs. mês anterior</p>
-          </Card>
         </div>
 
         {/* Tabs */}
@@ -139,7 +166,6 @@ export default function Reports() {
             <TabsTrigger value="scoring">Detalhamento de Pontos</TabsTrigger>
             <TabsTrigger value="overview">Visão Geral</TabsTrigger>
             {role === "pmo" && <TabsTrigger value="sectors">Por Setor</TabsTrigger>}
-            <TabsTrigger value="pendencies">Pendências</TabsTrigger>
           </TabsList>
 
           {/* Scoring Breakdown Tab */}
@@ -265,12 +291,49 @@ export default function Reports() {
           <TabsContent value="overview" className="mt-6 space-y-6">
             {/* Performance Chart */}
             <Card className="p-6">
-              <h3 className="text-xl font-bold text-foreground mb-4">Desempenho Mensal</h3>
-              <div className="h-64 flex items-center justify-center bg-muted/30 rounded-lg border border-border">
-                <div className="text-center">
-                  <BarChart3 className="w-12 h-12 text-muted-foreground mx-auto mb-2" />
-                  <p className="text-sm text-muted-foreground">Gráfico de desempenho mensal</p>
-                </div>
+              <h3 className="text-xl font-bold text-foreground mb-4">Desempenho Semestral</h3>
+              <div className="h-[900px] w-full">
+                <ChartContainer config={chartConfig}>
+                  <AreaChart
+                    data={chartData}
+                    margin={{
+                      top: 10,
+                      right: 30,
+                      left: 0,
+                      bottom: 0,
+                    }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--muted-foreground)/0.2)" />
+                    <XAxis 
+                      dataKey="month" 
+                      axisLine={false}
+                      tickLine={false}
+                      tick={{ fill: "hsl(var(--muted-foreground))" }}
+                    />
+                    <YAxis 
+                      axisLine={false}
+                      tickLine={false}
+                      tick={{ fill: "hsl(var(--muted-foreground))" }}
+                    />
+                    <ChartTooltip content={<ChartTooltipContent />} />
+                    <Area
+                      type="monotone"
+                      dataKey="points"
+                      stroke="var(--color-points)"
+                      fill="var(--color-points)"
+                      fillOpacity={0.1}
+                      strokeWidth={2}
+                    />
+                    <Area
+                      type="monotone"
+                      dataKey="tasks"
+                      stroke="var(--color-tasks)"
+                      fill="var(--color-tasks)"
+                      fillOpacity={0.1}
+                      strokeWidth={2}
+                    />
+                  </AreaChart>
+                </ChartContainer>
               </div>
             </Card>
 
@@ -315,66 +378,39 @@ export default function Reports() {
             <TabsContent value="sectors" className="mt-6">
               <Card className="p-6">
                 <h3 className="text-xl font-bold text-foreground mb-4">Análise por Setor</h3>
-                <div className="h-96 flex items-center justify-center bg-muted/30 rounded-lg border border-border">
-                  <div className="text-center">
-                    <BarChart3 className="w-12 h-12 text-muted-foreground mx-auto mb-2" />
-                    <p className="text-sm text-muted-foreground">Relatório detalhado por setor</p>
-                  </div>
+                <div className="h-[900px] w-full">
+                  <ChartContainer config={chartConfig}>
+                    <BarChart
+                      data={sectorData}
+                      layout="vertical"
+                      margin={{
+                        left: 40,
+                      }}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="hsl(var(--muted-foreground)/0.2)" />
+                      <XAxis type="number" hide />
+                      <YAxis
+                        dataKey="sector"
+                        type="category"
+                        axisLine={false}
+                        tickLine={false}
+                        tick={{ fill: "hsl(var(--muted-foreground))" }}
+                      />
+                      <ChartTooltip content={<ChartTooltipContent />} />
+                      <Bar
+                        dataKey="points"
+                        fill="var(--color-points)"
+                        radius={[0, 4, 4, 0]}
+                        barSize={30}
+                      />
+                    </BarChart>
+                  </ChartContainer>
                 </div>
               </Card>
             </TabsContent>
           )}
 
-          <TabsContent value="pendencies" className="mt-6">
-            <Card className="p-6">
-              <h3 className="text-xl font-bold text-foreground mb-4 flex items-center gap-2">
-                <AlertCircle className="w-5 h-5 text-warning" />
-                Relatório de Pendências
-              </h3>
-              <p className="text-sm text-muted-foreground mb-6">
-                Pendências são geradas quando o setor ganha Pontos Vitais (+100) ou é notificado por Ausência (-100).
-              </p>
-              <div className="space-y-4">
-                {[
-                  { id: 1, type: "vital", description: "Adicionar 'Verificação de bombas de infusão' ao checklist", source: "Pontos Vitais (+100)", date: "2025-12-15", status: "pending" },
-                  { id: 2, type: "absence", description: "Incluir 'Conferência de medicamentos de alto risco' no checklist", source: "Notificação de Ausência (-100)", date: "2025-12-14", status: "pending" },
-                  { id: 3, type: "vital", description: "Adicionar 'Checagem de temperatura dos refrigeradores' ao checklist", source: "Pontos Vitais (+100)", date: "2025-12-10", status: "resolved" },
-                ].map(pendency => (
-                  <div key={pendency.id} className={`flex items-center justify-between p-4 rounded-lg border ${
-                    pendency.status === "resolved" ? "border-success/30 bg-success/5" : "border-warning/30 bg-warning/5"
-                  }`}>
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-1">
-                        <Badge variant="outline" className={
-                          pendency.type === "vital" 
-                            ? "bg-success/10 text-success border-success/30"
-                            : "bg-destructive/10 text-destructive border-destructive/30"
-                        }>
-                          {pendency.source}
-                        </Badge>
-                        <Badge variant="outline" className={
-                          pendency.status === "resolved"
-                            ? "bg-success/10 text-success border-success/30"
-                            : "bg-warning/10 text-warning border-warning/30"
-                        }>
-                          {pendency.status === "resolved" ? "Resolvida" : "Pendente"}
-                        </Badge>
-                      </div>
-                      <p className="text-sm text-foreground">{pendency.description}</p>
-                      <p className="text-xs text-muted-foreground mt-1">
-                        {new Date(pendency.date).toLocaleDateString('pt-BR')}
-                      </p>
-                    </div>
-                    {pendency.status === "pending" && (
-                      <Button size="sm" className="bg-primary hover:bg-primary/90">
-                        Resolver
-                      </Button>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </Card>
-          </TabsContent>
+          
         </Tabs>
       </div>
     </AppLayout>

@@ -1,89 +1,131 @@
+import { useEffect, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { AlertTriangle, CheckCircle2, XCircle, Clock, Image } from "lucide-react";
+import { AlertTriangle, CheckCircle2, XCircle, Clock, Image, FileText, Loader2, Link as LinkIcon } from "lucide-react";
+import { supabase } from "@/lib/supabase";
+import { useRole } from "@/contexts/RoleContext";
+import { apiFetch } from "@/lib/api";
 
 interface Notification {
   id: string;
-  type: "alert" | "absence" | "aggravation" | "audit";
+  type: string;
   fromSector: string;
-  toSector?: string;
+  fromUnidade: string;
+  toSector: string;
+  toUnidade: string;
   description: string;
   points: number;
-  status: "pending" | "accepted" | "disputed" | "judged";
+  status: string;
   timestamp: string;
-  evidence?: boolean;
+  has_evidence?: boolean;
 }
-
-const mockNotifications: Notification[] = [
-  {
-    id: "1",
-    type: "absence",
-    fromSector: "UTI Adulto",
-    toSector: "Farmácia",
-    description: "Falta de verificação de estoque de medicamentos de emergência no turno noturno",
-    points: -100,
-    status: "pending",
-    timestamp: "Há 2 horas",
-    evidence: true,
-  },
-  {
-    id: "2",
-    type: "alert",
-    fromSector: "UTI Adulto",
-    toSector: "Centro Diagnóstico",
-    description: "Equipamento de monitoramento cardíaco não calibrado conforme protocolo",
-    points: -50,
-    status: "disputed",
-    timestamp: "Há 5 horas",
-  },
-  {
-    id: "3",
-    type: "audit",
-    fromSector: "Pediatria",
-    description: "Identificação de não conformidade no setor de Ortopedia",
-    points: 50,
-    status: "accepted",
-    timestamp: "Ontem, 14:30",
-    evidence: true,
-  },
-  {
-    id: "4",
-    type: "aggravation",
-    fromSector: "PMO",
-    toSector: "Laboratório",
-    description: "Terceira ocorrência de atraso na entrega de resultados em 30 dias",
-    points: -150,
-    status: "judged",
-    timestamp: "2 dias atrás",
-  },
-];
 
 interface NotificationPanelProps {
   role: "pmo" | "coordinator";
 }
 
-export const NotificationPanel = ({ role }: NotificationPanelProps) => {
+export const NotificationPanel = ({ role: componentRole }: NotificationPanelProps) => {
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const { role, userSector } = useRole();
+
+  useEffect(() => {
+    fetchNotifications();
+  }, [userSector, role]);
+
+  const fetchNotifications = async () => {
+    try {
+      setIsLoading(true);
+      
+      // Buscar unidade do usuário se não for PMO
+      let unitIdToFilter = null;
+      if (role !== "pmo") {
+        const sectors = await apiFetch("/admin/sectors").catch(() => []);
+        const mySector = sectors.find((s: any) => 
+          s.nome.trim().toLowerCase() === userSector.trim().toLowerCase()
+        );
+        if (mySector) unitIdToFilter = mySector.unidade_id;
+      }
+
+      let query = supabase
+        .from("notificacoes")
+        .select(`
+          *,
+          setor:setor_id(nome),
+          unidade:unidade_id(nome),
+          setor_ref:id_setor_ref(nome),
+          unidade_ref:id_unidade_ref(nome)
+        `)
+        .order("created_at", { ascending: false })
+        .limit(5);
+
+      if (unitIdToFilter) {
+        query = query.eq('unidade_id', unitIdToFilter);
+      }
+
+      const { data, error } = await query;
+
+      if (error) throw error;
+
+      const formattedData = (data || []).map((n: any) => ({
+        id: n.id,
+        type: n.notified ? "alert" : "absence",
+        fromSector: n.setor_ref?.nome || "Sistema",
+        fromUnidade: n.unidade_ref?.nome || "Geral",
+        toSector: n.setor?.nome || "Auditado",
+        toUnidade: n.unidade?.nome || "Unidade",
+        description: n.description,
+        points: n.notified ? -50 : -100,
+        status: n.status || "pending",
+        timestamp: n.created_at,
+        has_evidence: !!n.upload_url
+      }));
+
+      setNotifications(formattedData);
+    } catch (error) {
+      console.error("Erro ao buscar notificações:", error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const formatTimestamp = (timestamp: string) => {
+    try {
+      const isoString = timestamp.includes('T') 
+        ? timestamp 
+        : timestamp.replace(' ', 'T');
+      const dateObj = new Date(isoString.endsWith('Z') || isoString.includes('+') ? isoString : `${isoString}Z`);
+      return dateObj.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+    } catch (e) {
+      return timestamp;
+    }
+  };
+
   const getTypeInfo = (type: string) => {
     switch (type) {
+      case "Alerta":
       case "alert":
         return { 
           label: "Notificação de Alerta", 
           color: "bg-warning/10 text-warning border-warning/30",
           icon: <AlertTriangle className="w-4 h-4" />
         };
+      case "Ausência":
       case "absence":
         return { 
           label: "Notificação de Ausência", 
           color: "bg-destructive/10 text-destructive border-destructive/30",
           icon: <XCircle className="w-4 h-4" />
         };
+      case "Agravamento":
       case "aggravation":
         return { 
           label: "Notificação de Agravamento", 
           color: "bg-destructive text-destructive-foreground",
           icon: <AlertTriangle className="w-4 h-4 fill-current" />
         };
+      case "Audit":
       case "audit":
         return { 
           label: "Pontos de Auditoria", 
@@ -92,9 +134,9 @@ export const NotificationPanel = ({ role }: NotificationPanelProps) => {
         };
       default:
         return { 
-          label: "Notificação", 
+          label: type || "Notificação", 
           color: "bg-muted text-foreground",
-          icon: <AlertTriangle className="w-4 h-4" />
+          icon: <FileText className="w-4 h-4" />
         };
     }
   };
@@ -102,114 +144,107 @@ export const NotificationPanel = ({ role }: NotificationPanelProps) => {
   const getStatusBadge = (status: string) => {
     switch (status) {
       case "pending":
-        return <Badge variant="outline" className="gap-1"><Clock className="w-3 h-3" />Pendente</Badge>;
-      case "accepted":
-        return <Badge className="bg-success text-success-foreground gap-1"><CheckCircle2 className="w-3 h-3" />Aceito</Badge>;
+      case "pendente":
+        return <Badge variant="outline" className="bg-warning/10 text-warning border-warning/30">Pendente</Badge>;
       case "disputed":
-        return <Badge className="bg-warning text-warning-foreground gap-1"><AlertTriangle className="w-3 h-3" />Em Disputa</Badge>;
+      case "contestada":
+        return <Badge variant="outline" className="bg-blue-500/10 text-blue-500 border-blue-500/30">Contestada</Badge>;
+      case "accepted":
+      case "aceita":
+        return <Badge variant="outline" className="bg-success/10 text-success border-success/30">Aceita</Badge>;
       case "judged":
-        return <Badge className="bg-muted text-foreground gap-1">Julgado</Badge>;
+      case "julgada":
+        return <Badge variant="outline" className="bg-purple-500/10 text-purple-500 border-purple-500/30">Julgada</Badge>;
+      default:
+        return <Badge variant="outline">{status}</Badge>;
     }
   };
+
+  if (isLoading) {
+    return (
+      <Card className="p-6">
+        <div className="flex justify-center py-12">
+          <Loader2 className="w-8 h-8 animate-spin text-primary" />
+        </div>
+      </Card>
+    );
+  }
 
   return (
     <Card className="p-6">
       <div className="flex items-center justify-between mb-6">
         <div>
           <h3 className="text-xl font-bold text-foreground">
-            {role === "pmo" ? "Gestão de Notificações" : "Notificações Recebidas"}
+            {role === "pmo" ? "Gestão de Notificações" : "Notificações Recentes"}
           </h3>
           <p className="text-sm text-muted-foreground mt-1">
-            {mockNotifications.filter(n => n.status === "pending").length} notificações pendentes
+            Exibindo as últimas ocorrências
           </p>
         </div>
-        {role === "coordinator" && (
-          <Button className="gap-2 bg-primary hover:bg-primary/90">
-            <AlertTriangle className="w-4 h-4" />
-            Notificar Erro
-          </Button>
-        )}
+        <Button variant="outline" size="sm" onClick={() => window.location.href='/notifications'}>
+          Ver Todas
+        </Button>
       </div>
 
       <div className="space-y-4">
-        {mockNotifications.map((notification) => {
-          const typeInfo = getTypeInfo(notification.type);
-          
-          return (
-            <div
-              key={notification.id}
-              className="p-4 rounded-lg border-2 border-border bg-card hover:border-primary/50 transition-all"
-            >
-              <div className="flex items-start gap-4">
-                <div className="flex-1">
-                  <div className="flex items-start justify-between gap-4 mb-3">
-                    <div className="flex items-center gap-2 flex-wrap">
+        {notifications.length === 0 ? (
+          <div className="text-center py-8 text-muted-foreground">
+            Nenhuma notificação encontrada.
+          </div>
+        ) : (
+          notifications.map((notification) => {
+            const typeInfo = getTypeInfo(notification.type);
+            return (
+              <div key={notification.id} className="p-4 rounded-lg border-2 border-border bg-card hover:border-primary/50 transition-all">
+                <div className="flex flex-col gap-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
                       <Badge className={typeInfo.color} variant="outline">
                         {typeInfo.icon}
-                        {typeInfo.label}
+                        <span className="ml-1">{typeInfo.label}</span>
                       </Badge>
                       {getStatusBadge(notification.status)}
                     </div>
+                    <Badge className={`${notification.points > 0 ? "bg-success" : "bg-destructive"} text-white font-bold`}>
+                      {notification.points > 0 ? "+" : ""}{notification.points}
+                    </Badge>
+                  </div>
+
+                  <div>
+                    <div className="flex flex-col gap-1.5 mb-2">
+                       <div className="flex items-center gap-2 text-[10px] font-bold text-muted-foreground uppercase">
+                        <span className="bg-muted px-1.5 py-0.5 rounded">De: {notification.fromUnidade} • {notification.fromSector}</span>
+                      </div>
+                      <div className="flex items-center gap-2 text-[10px] font-bold text-primary uppercase">
+                        <span className="bg-primary/10 px-1.5 py-0.5 rounded">Para: {notification.toUnidade} • {notification.toSector}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between pt-2 border-t border-border">
+                    <span className="text-[10px] text-muted-foreground flex items-center gap-1">
+                      <Clock className="w-3 h-3" />
+                      {formatTimestamp(notification.timestamp)}
+                    </span>
                     <div className="flex items-center gap-2">
-                      <Badge className={`${notification.points > 0 ? "bg-success" : "bg-destructive"} text-white font-bold`}>
-                        {notification.points > 0 ? "+" : ""}{notification.points}
-                      </Badge>
+                      {notification.has_evidence && (
+                        <Badge variant="outline" className="text-[9px] gap-1 bg-blue-500/5 text-blue-500 border-blue-500/20">
+                          <LinkIcon className="w-2.5 h-2.5" />
+                          Evidência
+                        </Badge>
+                      )}
+                      <Button variant="ghost" size="sm" className="h-7 text-[10px] hover:text-primary" onClick={() => window.location.href='/notifications'}>
+                        Detalhes
+                      </Button>
                     </div>
                   </div>
-
-                  <div className="mb-3">
-                    <div className="flex items-center gap-2 text-sm text-muted-foreground mb-2">
-                      <span className="font-medium text-foreground">{notification.fromSector}</span>
-                      {notification.toSector && (
-                        <>
-                          <span>→</span>
-                          <span className="font-medium text-foreground">{notification.toSector}</span>
-                        </>
-                      )}
-                      <span className="ml-auto">{notification.timestamp}</span>
-                    </div>
-                    <p className="text-foreground">{notification.description}</p>
-                  </div>
-
-                  {notification.evidence && (
-                    <div className="flex items-center gap-2 text-sm text-muted-foreground mb-3">
-                      <Image className="w-4 h-4" />
-                      <span>Evidência anexada</span>
-                    </div>
-                  )}
-
-                  {notification.status === "pending" && (
-                    <div className="flex items-center gap-2 pt-2">
-                      {role === "pmo" ? (
-                        <>
-                          <Button size="sm" className="bg-success hover:bg-success/90 text-success-foreground">
-                            Validar
-                          </Button>
-                          <Button size="sm" variant="destructive">
-                            Rejeitar
-                          </Button>
-                          <Button size="sm" variant="outline">
-                            Ver Detalhes
-                          </Button>
-                        </>
-                      ) : (
-                        <>
-                          <Button size="sm" className="bg-success hover:bg-success/90 text-success-foreground">
-                            Reconhecer Falha
-                          </Button>
-                          <Button size="sm" variant="destructive">
-                            Discordar
-                          </Button>
-                        </>
-                      )}
-                    </div>
-                  )}
                 </div>
               </div>
-            </div>
-          );
-        })}
+            );
+          })
+        )}
       </div>
     </Card>
   );
 };
+
