@@ -18,6 +18,7 @@ export default function AuthPage() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [mustResetPassword, setMustResetPassword] = useState(false);
+  const [isLocalAuth, setIsLocalAuth] = useState(false);
   const { setRole, setUserName, setUserSector, setUserUnitId, setUserSectorId } = useRole();
   const navigate = useNavigate();
   const { toast } = useToast();
@@ -37,6 +38,11 @@ export default function AuthPage() {
 
       if (authData.user) {
         console.log("Login successful. User ID:", authData.user.id);
+        console.log("Session details:", {
+          hasSession: !!authData.session,
+          expires_at: authData.session?.expires_at
+        });
+        
         const metadata = authData.user.user_metadata;
         console.log("User metadata:", metadata);
         
@@ -109,6 +115,7 @@ export default function AuthPage() {
         });
 
         if (data.user.needsPasswordReset) {
+          setIsLocalAuth(true);
           setMustResetPassword(true);
           toast({
             title: "Primeiro Acesso",
@@ -118,6 +125,7 @@ export default function AuthPage() {
           return;
         }
 
+        setIsLocalAuth(true);
         setRole(data.user.role);
         setUserName(data.user.name);
         setUserSector(data.user.sector || "Setor Geral");
@@ -136,6 +144,7 @@ export default function AuthPage() {
         // 3. Fallback final para admin123 (Desenvolvimento)
         // Se usar a senha padrão, mesmo no mock, pedimos reset
         if (email === "admin@genesis.com" && password === "admin123") {
+          setIsLocalAuth(true);
           setMustResetPassword(true);
           toast({
             title: "Primeiro Acesso (Mock)",
@@ -184,28 +193,44 @@ export default function AuthPage() {
       }
 
       console.log("Atualizando senha no Supabase Auth...");
-      // 2. Atualizar no Supabase Auth
-      const { data: resetData, error: resetError } = await supabase.auth.updateUser({
-        password: newPassword,
-        data: { needs_password_reset: false }
-      });
+      
+      const userEmail = email.toLowerCase().trim();
 
-      if (resetError) throw resetError;
+      if (!isLocalAuth) {
+        // Verificação de segurança: garantir que existe uma sessão ativa
+        const { data: { session: currentSession } } = await supabase.auth.getSession();
+        console.log("Sessão ativa encontrada:", !!currentSession);
+        
+        if (!currentSession) {
+          console.warn("Sessão perdida. Tentando recuperar usuário...");
+          const { data: { user: currentUser } } = await supabase.auth.getUser();
+          if (!currentUser) {
+            throw new Error("Sessão de autenticação expirou ou não foi encontrada. Por favor, faça login novamente.");
+          }
+        }
 
-      // Garantir o e-mail em minúsculas para consistência com o banco
-      const userEmail = (resetData.user?.email || email).toLowerCase().trim();
-      console.log("Sincronizando senha com tabela local 'users' para:", userEmail);
+        // 2. Atualizar no Supabase Auth
+        const { data: resetData, error: resetError } = await supabase.auth.updateUser({
+          password: newPassword,
+          data: { needs_password_reset: false }
+        });
+
+        if (resetError) throw resetError;
+        console.log("Supabase Auth password updated.");
+      } else {
+        console.log("Modo local detectado. Pulando atualização do Supabase Auth.");
+      }
 
       // 3. Sincronizar com a tabela local via Backend
       try {
-        const syncResponse = await apiFetch("/auth/reset-password", {
+        await apiFetch("/auth/reset-password", {
           method: "POST",
           body: JSON.stringify({ 
             email: userEmail, 
             newPassword: newPassword 
           }),
         });
-        console.log("Database sync successful:", syncResponse);
+        console.log("Database sync successful");
       } catch (syncError: any) {
         console.error("Erro crítico na sincronização local:", syncError);
         toast({
