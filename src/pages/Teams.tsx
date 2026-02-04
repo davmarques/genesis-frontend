@@ -40,7 +40,7 @@ import {
 } from "lucide-react";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { ScoreCard } from "@/components/dashboard/ScoreCard";
-import { useRole } from "@/contexts/RoleContext";
+import { useRole, normalizeRole } from "@/contexts/RoleContext";
 import { toast } from "sonner";
 import { apiFetch } from "@/lib/api";
 import { supabase } from "@/lib/supabase";
@@ -50,11 +50,13 @@ interface TeamMember {
   name: string;
   email: string;
   phone: string;
-  role: "pmo" | "coordinator" | "collaborator";
+  role: "pmo" | "manager" | "collaborator";
   sector: string;
+  managedSectorName?: string;
   setor_id?: number | string;
   unidade_id?: number | string;
   unidade_nome?: string;
+  isSectorManager?: boolean;
   status: "active" | "inactive";
   tasksCompleted: number;
   totalTasks: number;
@@ -69,7 +71,9 @@ interface Sector {
   unidade_id?: number;
   unidade_nome?: string;
   coordenador_id?: number;
-  coordinator?: string; // Nome vindo do join no backend
+  manager?: string; // Nome vindo do join no backend
+  manager_email?: string;
+  manager_id?: string | number;
   membersCount?: number;
   score?: number;
   completionRate?: number;
@@ -81,106 +85,30 @@ interface Unidade {
   nome: string;
 }
 
-interface Coordinator {
+interface Manager {
   id: number;
   name: string;
 }
 
-const mockTeamMembers: TeamMember[] = [
- /*  {
-    id: "1",
-    name: "João Silva",
-    email: "joao.silva@hospital.com",
-    phone: "(11) 98765-4321",
-    role: "collaborator",
-    sector: "Cardiologia",
-    status: "active",
-    tasksCompleted: 127,
-    totalTasks: 135,
-    points: 1270,
-    level: 5,
-    joinDate: "2024-01-15"
-  },
-  {
-    id: "2",
-    name: "Ana Oliveira",
-    email: "ana.oliveira@hospital.com",
-    phone: "(11) 98765-4322",
-    role: "collaborator",
-    sector: "Cardiologia",
-    status: "active",
-    tasksCompleted: 98,
-    totalTasks: 102,
-    points: 980,
-    level: 4,
-    joinDate: "2024-02-20"
-  },
-  {
-    id: "3",
-    name: "Pedro Costa",
-    email: "pedro.costa@hospital.com",
-    phone: "(11) 98765-4323",
-    role: "collaborator",
-    sector: "Cardiologia",
-    status: "active",
-    tasksCompleted: 156,
-    totalTasks: 160,
-    points: 1560,
-    level: 6,
-    joinDate: "2023-11-10"
-  },
-  {
-    id: "4",
-    name: "Lucia Ferreira",
-    email: "lucia.ferreira@hospital.com",
-    phone: "(11) 98765-4324",
-    role: "collaborator",
-    sector: "Cardiologia",
-    status: "inactive",
-    tasksCompleted: 45,
-    totalTasks: 78,
-    points: 450,
-    level: 2,
-    joinDate: "2024-08-05"
-  }, */
-];
-
-const mockSectors: Sector[] = [
-  /* { id: "1", nome: "Ambulatório", coordinator: "Dra. Maria Santos", membersCount: 15, score: 3845, completionRate: 94, status: "active" },
-  { id: "2", nome: "Atendimento PS", coordinator: "Dr. Paulo Lima", membersCount: 22, score: 3720, completionRate: 91, status: "active" },
-  { id: "3", nome: "Central de Autorização", coordinator: "Dra. Clara Mendes", membersCount: 28, score: 3580, completionRate: 88, status: "active" },
-  { id: "4", nome: "Central de Internação", coordinator: "Dr. Ricardo Alves", membersCount: 12, score: 3420, completionRate: 95, status: "active" },
-  { id: "5", nome: "Centro Cirúrgico", coordinator: "Dra. Fernanda Dias", membersCount: 10, score: 3210, completionRate: 93, status: "active" },
-  { id: "6", nome: "Centro Diagnóstico", coordinator: "Dr. Marcos Souza", membersCount: 18, score: 2980, completionRate: 89, status: "active" },
-  { id: "7", nome: "Controladoria", coordinator: "Dr. Marcos Souza", membersCount: 18, score: 2980, completionRate: 89, status: "active" },
-  { id: "8", nome: "Farmácia e Suprimentos", coordinator: "Dr. Marcos Souza", membersCount: 18, score: 2980, completionRate: 89, status: "active" },
-  { id: "9", nome: "Faturamento", coordinator: "Dr. Marcos Souza", membersCount: 18, score: 2980, completionRate: 89, status: "active" },
-  { id: "10", nome: "Financeiro", coordinator: "Dr. Marcos Souza", membersCount: 18, score: 2980, completionRate: 89, status: "active" },
-  { id: "11", nome: "Gestão de Leitos", coordinator: "Dr. Marcos Souza", membersCount: 18, score: 2980, completionRate: 89, status: "active" },
-  { id: "12", nome: "Higienização", coordinator: "Dr. Marcos Souza", membersCount: 18, score: 2980, completionRate: 89, status: "active" },
-  { id: "13", nome: "Hotelaria", coordinator: "Dr. Marcos Souza", membersCount: 18, score: 2980, completionRate: 89, status: "active" },
-  { id: "14", nome: "IRT", coordinator: "Dr. Marcos Souza", membersCount: 18, score: 2980, completionRate: 89, status: "active" },
-  { id: "15", nome: "Laboratório", coordinator: "Dr. Marcos Souza", membersCount: 18, score: 2980, completionRate: 89, status: "active" },
-  { id: "16", nome: "Nutrição", coordinator: "Dr. Marcos Souza", membersCount: 18, score: 2980, completionRate: 89, status: "active" },
-  { id: "17", nome: "Oncologia", coordinator: "Dr. Marcos Souza", membersCount: 18, score: 2980, completionRate: 89, status: "active" },
-  { id: "18", nome: "Pediatria", coordinator: "Dr. Marcos Souza", membersCount: 18, score: 2980, completionRate: 89, status: "active" },
-  { id: "19", nome: "Pré-Faturamento", coordinator: "Dr. Marcos Souza", membersCount: 18, score: 2980, completionRate: 89, status: "active" },
-  { id: "20", nome: "Pronto-Socorro", coordinator: "Dr. Marcos Souza", membersCount: 18, score: 2980, completionRate: 89, status: "active" },
-  { id: "21", nome: "Regra de Negócios", coordinator: "Dr. Marcos Souza", membersCount: 18, score: 2980, completionRate: 89, status: "active" },
-  { id: "22", nome: "Transporte", coordinator: "Dr. Marcos Souza", membersCount: 18, score: 2980, completionRate: 89, status: "active" },
-  { id: "23", nome: "Unidade de Internação", coordinator: "Dr. Marcos Souza", membersCount: 18, score: 2980, completionRate: 89, status: "active" },
-  { id: "24", nome: "UTI Adulto", coordinator: "Dr. Marcos Souza", membersCount: 18, score: 2980, completionRate: 89, status: "active" },
-  { id: "25", nome: "UTINP", coordinator: "Dr. Marcos Souza", membersCount: 18, score: 2980, completionRate: 89, status: "active" }, */
-];
-
 export default function Teams() {
   const [searchQuery, setSearchQuery] = useState("");
-  const { role, rolePermissions, userSector } = useRole();
+  const { role, rolePermissions, userSector, userUnitId, userSectorId } = useRole();
   const [activeTab, setActiveTab] = useState(role === "pmo" ? "sectors" : "members");
   const [isUserModalOpen, setIsUserModalOpen] = useState(false);
+
+  // Pre-fill form data for managers
+  useEffect(() => {
+    if (isUserModalOpen && role === "manager") {
+      setFormData(prev => ({
+        ...prev,
+        unidade_id: userUnitId || "",
+        sector: userSector || ""
+      }));
+    }
+  }, [isUserModalOpen, role, userUnitId, userSector]);
   const [isSectorModalOpen, setIsSectorModalOpen] = useState(false);
   const [unidades, setUnidades] = useState<Unidade[]>([]);
-  const [coordinators, setCoordinators] = useState<Coordinator[]>([]);
+  const [managers, setManagers] = useState<Manager[]>([]);
   const [members, setMembers] = useState<TeamMember[]>([]);
   const [isLoadingMembers, setIsLoadingMembers] = useState(false);
   const [notifications, setNotifications] = useState<any[]>([]);
@@ -207,21 +135,26 @@ export default function Teams() {
       setIsLoadingSectors(true);
       setIsLoadingMembers(true);
       try {
-        const [sectorsData, unidadesData, coordinatorsData, membersData, notificationsData] = await Promise.allSettled([
+        const [sectorsData, unidadesData, managersData, membersData, notificationsData] = await Promise.allSettled([
           apiFetch("/admin/sectors"),
           apiFetch("/admin/unidades"),
-          apiFetch("/admin/coordinators"),
+          apiFetch("/admin/managers"),
           apiFetch("/admin/members"),
           supabase.from('notificacoes').select('*')
         ]);
 
         setSectors(sectorsData.status === 'fulfilled' ? (sectorsData.value || []) : []);
         setUnidades(unidadesData.status === 'fulfilled' ? (unidadesData.value || []) : []);
-        setCoordinators(coordinatorsData.status === 'fulfilled' ? (coordinatorsData.value || []) : []);
+        setManagers(managersData.status === 'fulfilled' ? (managersData.value || []) : []);
         setMembers(membersData.status === 'fulfilled' ? (membersData.value || []) : []);
         setNotifications(notificationsData.status === 'fulfilled' ? (notificationsData.value.data || []) : []);
 
-        if (sectorsData.status === 'rejected' || unidadesData.status === 'rejected' || coordinatorsData.status === 'rejected' || membersData.status === 'rejected') {
+        console.log("Data loaded:", {
+          sectors: sectorsData.status === 'fulfilled' ? sectorsData.value : "error",
+          members: membersData.status === 'fulfilled' ? membersData.value : "error"
+        });
+
+        if (sectorsData.status === 'rejected' || unidadesData.status === 'rejected' || managersData.status === 'rejected' || membersData.status === 'rejected') {
           console.warn("Alguns dados não puderam ser carregados");
         }
       } catch (error) {
@@ -319,50 +252,63 @@ export default function Teams() {
   const getSubtitle = () => {
     switch (role) {
       case "pmo": return "Gerencie todos os setores e usuários";
-      case "coordinator": return `Gerencie sua equipe do setor ${userSector}`;
+      case "manager": return `Gerencie sua equipe do setor ${userSector}`;
       default: return "Visualize membros da equipe";
     }
   };
 
   // Filter based on role
-  const filteredMembers = (members.length > 0 ? members : []).filter(m => {
+  const filteredMembers = (members && members.length > 0 ? members : []).filter(m => {
     const searchLower = searchQuery.toLowerCase();
     const matchesSearch = 
-      m.name.toLowerCase().includes(searchLower) || 
-      m.email.toLowerCase().includes(searchLower) ||
-      m.sector.toLowerCase().includes(searchLower) ||
+      (m.name || "").toLowerCase().includes(searchLower) || 
+      (m.email || "").toLowerCase().includes(searchLower) ||
+      (m.sector || "").toLowerCase().includes(searchLower) ||
       (m.unidade_nome || "").toLowerCase().includes(searchLower);
     
     if (!matchesSearch) return false;
 
+    // PMO vê tudo
     if (role === "pmo") return true;
-    if (role === "coordinator") return m.sector === userSector;
-    return false;
+    
+    // Gestor e Colaborador vêem membros do seu próprio setor
+    if (userSectorId && m.setor_id) {
+      return String(m.setor_id) === String(userSectorId);
+    }
+    
+    return m.sector === userSector;
   });
 
-  const filteredSectors = (sectors.length > 0 ? sectors : []).filter(s => {
+  const filteredSectors = (sectors && sectors.length > 0 ? sectors : []).filter(s => {
     const searchLower = searchQuery.toLowerCase();
-    return (
-      s.nome.toLowerCase().includes(searchLower) ||
+    const managerName = s.manager || (s as any).coordinator || (s as any).coordenador?.name || "";
+    const matchesSearch = (
+      (s.nome || "").toLowerCase().includes(searchLower) ||
       (s.unidade_nome || "").toLowerCase().includes(searchLower) ||
-      (s.coordinator || "").toLowerCase().includes(searchLower)
+      managerName.toLowerCase().includes(searchLower)
     );
+
+    if (!matchesSearch) return false;
+
+    if (role === "pmo") return true;
+    
+    if (userSectorId && s.id) {
+      return String(s.id) === String(userSectorId);
+    }
+    
+    return s.nome === userSector;
   }).map(sector => {
-    // Vincular membros e pontos reais
     const sectorMembers = members.filter(m => 
-      m.setor_id === sector.id || 
+      (m.setor_id && sector.id && String(m.setor_id) === String(sector.id)) || 
       m.sector === sector.nome
     );
 
-    // Calcular score baseado nas notificações do setor
     const sectorScore = notifications.reduce((acc, n) => {
       let score = acc;
-      // Ganha 50 pontos se reportou uma irregularidade
-      if (Number(n.id_setor_ref) === Number(sector.id)) {
+      if (String(n.id_setor_ref) === String(sector.id)) {
         score += 50;
       }
-      // Perde pontos se recebeu uma irregularidade
-      if (Number(n.setor_id) === Number(sector.id)) {
+      if (String(n.setor_id) === String(sector.id)) {
         score += (n.notified ? -50 : -100);
       }
       return score;
@@ -384,19 +330,20 @@ export default function Teams() {
   };
 
   const getRoleBadge = (memberRole: string) => {
+    const normalized = normalizeRole(memberRole);
     const variants = {
       pmo: "bg-gold/10 text-gold border-gold/30",
-      coordinator: "bg-primary/10 text-primary border-primary/30",
+      manager: "bg-primary/10 text-primary border-primary/30",
       collaborator: "bg-secondary/10 text-secondary-foreground border-secondary/30"
     };
     const labels = {
       pmo: "PMO",
-      coordinator: "Coordenador",
+      manager: "Gestor",
       collaborator: "Colaborador"
     };
     return (
-      <Badge variant="outline" className={variants[memberRole as keyof typeof variants]}>
-        {labels[memberRole as keyof typeof labels]}
+      <Badge variant="outline" className={variants[normalized as keyof typeof variants]}>
+        {labels[normalized as keyof typeof labels]}
       </Badge>
     );
   };
@@ -417,13 +364,13 @@ export default function Teams() {
               </Button>
             )}
           </div>
-          {(role === "pmo" || role === "coordinator") && (
+          {rolePermissions.canManageUsers && (
             <Button 
               className="gap-2 bg-primary hover:bg-primary/90"
               onClick={() => setIsUserModalOpen(true)}
             >
               <UserPlus className="w-4 h-4" />
-              {role === "coordinator" ? "Adicionar Colaborador" : "Adicionar Usuário"}
+              {role === "manager" ? "Adicionar Colaborador" : "Adicionar Usuário"}
             </Button>
           )}
         </div>
@@ -477,9 +424,9 @@ export default function Teams() {
         <Tabs value={activeTab} onValueChange={setActiveTab}>
           <TabsList>
             {role === "pmo" && <TabsTrigger value="sectors">Setores</TabsTrigger>}
-            {role === "pmo" && <TabsTrigger value="coordinators">Coordenadores</TabsTrigger>}
+            {role === "pmo" && <TabsTrigger value="managers">Gestores</TabsTrigger>}
             <TabsTrigger value="members">
-              {role === "coordinator" ? "Minha Equipe" : "Membros"}
+              {role === "manager" ? "Minha Equipe" : "Membros"}
             </TabsTrigger>
           </TabsList>
 
@@ -506,6 +453,11 @@ export default function Teams() {
                             </h3>
                             <div className="flex flex-wrap items-center gap-2 mb-2">
                               {getRoleBadge(member.role)}
+                              {member.isSectorManager && (
+                                <Badge className="bg-amber-100 text-amber-700 border-amber-200">
+                                  Líder do Setor
+                                </Badge>
+                              )}
                               <Badge variant="secondary" className="bg-blue-100 text-blue-700 border-blue-200">
                                 {member.unidade_nome || "Anchieta"}
                               </Badge>
@@ -520,7 +472,7 @@ export default function Teams() {
                               <Badge variant="outline">Nível {member.level}</Badge>
                             </div>
                           </div>
-                          {(role === "pmo" || role === "coordinator") && (
+                          {rolePermissions.canManageUsers && (
                             <Button variant="ghost" size="icon">
                               <MoreVertical className="w-4 h-4" />
                             </Button>
@@ -561,7 +513,7 @@ export default function Teams() {
                           </div>
                         </div>
 
-                        {role === "coordinator" && (
+                        {role === "manager" && (
                           <div className="flex gap-2 pt-3">
                             <Button size="sm" variant="outline" className="flex-1">
                               Atribuir Tarefa
@@ -597,9 +549,17 @@ export default function Teams() {
                         </div>
                         <div>
                           <h3 className="text-lg font-bold text-foreground">{sector.nome}</h3>
-                          <p className="text-sm text-muted-foreground">
-                            Unidade: <span className="font-semibold text-primary">{sector.unidade_nome}</span> | Coordenador: <span className="font-semibold text-foreground">{sector.coordinator || "Sem coordenador"}</span>
-                          </p>
+                          <div className="flex flex-col gap-1">
+                            <p className="text-sm text-muted-foreground">
+                              Unidade: <span className="font-semibold text-primary">{sector.unidade_nome}</span> | Gestor: <span className="font-semibold text-foreground">{sector.manager || (sector as any).coordinator || (sector as any).coordenador?.name || "Não definido"}</span>
+                            </p>
+                            {(sector.manager_email || (sector as any).coordenador?.email) && (
+                              <p className="text-xs text-muted-foreground flex items-center gap-1">
+                                <Mail className="w-3 h-3" />
+                                {sector.manager_email || (sector as any).coordenador?.email}
+                              </p>
+                            )}
+                          </div>
                         </div>
                       </div>
                       <div className="flex items-center gap-6">
@@ -625,49 +585,74 @@ export default function Teams() {
             </TabsContent>
           )}
 
-          {/* Coordinators Tab (PMO Only) */}
+          {/* Managers Tab (PMO Only) */}
           {role === "pmo" && (
-            <TabsContent value="coordinators" className="mt-6">
+            <TabsContent value="managers" className="mt-6">
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                {filteredSectors.map((sector) => (
-                  <Card key={sector.id} className="p-6 hover:border-primary/50 transition-all">
-                    <div className="flex items-start gap-4">
-                      <Avatar className="w-14 h-14 bg-gradient-to-br from-primary to-secondary">
-                        <AvatarFallback className="bg-transparent text-primary-foreground font-semibold">
-                          {(sector.coordinator || "SC").split(" ").map(n => n[0]).join("").slice(0, 2)}
-                        </AvatarFallback>
-                      </Avatar>
-                      <div className="flex-1">
-                        <h3 className="text-xl font-bold text-foreground mb-1">
-                          {sector.coordinator || "Sem Coordenador"}
-                        </h3>
-                        <div className="flex flex-wrap items-center gap-2 mb-3">
-                          <Badge variant="outline" className="bg-primary/10 text-primary border-primary/30">
-                            Coordenador
-                          </Badge>
-                          <Badge variant="secondary" className="bg-blue-100 text-blue-700 border-blue-200">
-                            {sector.unidade_nome || "Anchieta"}
-                          </Badge>
-                          <Badge variant="outline">{sector.nome}</Badge>
+                {members
+                  .filter(m => m.isSectorManager || normalizeRole(m.role) === "manager")
+                  .map((managerMember) => {
+                    const mySector = sectors.find(s => 
+                      String(s.coordenador_id) === String(managerMember.id) ||
+                      String((s as any).manager_id) === String(managerMember.id) ||
+                      s.nome === managerMember.managedSectorName ||
+                      s.nome === managerMember.sector
+                    );
+
+                    const sectorMembers = members.filter(m => 
+                      (m.setor_id && mySector?.id && String(m.setor_id) === String(mySector.id)) || 
+                      (m.sector === mySector?.nome)
+                    );
+
+                    return (
+                      <Card key={managerMember.id} className="p-6 hover:border-primary/50 transition-all">
+                        <div className="flex items-start gap-4">
+                          <Avatar className="w-14 h-14 bg-gradient-to-br from-primary to-secondary">
+                            <AvatarFallback className="bg-transparent text-primary-foreground font-semibold">
+                              {getInitials(managerMember.name)}
+                            </AvatarFallback>
+                          </Avatar>
+                          <div className="flex-1">
+                            <h3 className="text-xl font-bold text-foreground mb-1">
+                              {managerMember.name}
+                            </h3>
+                            <div className="flex items-center gap-2 text-sm text-muted-foreground mb-2">
+                              <Mail className="w-3 h-3" />
+                              <span>{managerMember.email}</span>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-2 mb-3">
+                              <Badge variant="outline" className="bg-primary/10 text-primary border-primary/30">
+                                Gestor
+                              </Badge>
+                              <Badge variant="secondary" className="bg-blue-100 text-blue-700 border-blue-200">
+                                {managerMember.unidade_nome || "Hospital"}
+                              </Badge>
+                              <Badge variant="outline">{mySector?.nome || managerMember.sector || managerMember.managedSectorName || "Sem Setor"}</Badge>
+                            </div>
+                            <div className="grid grid-cols-3 gap-4 pt-3 border-t border-border">
+                              <div>
+                                <p className="text-xs text-muted-foreground">Equipe</p>
+                                <p className="font-semibold text-foreground">{sectorMembers.length}</p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-muted-foreground">Pontos</p>
+                                <p className="font-semibold text-primary">{managerMember.points}</p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-muted-foreground">Nível</p>
+                                <p className="font-semibold text-foreground">{managerMember.level}</p>
+                              </div>
+                            </div>
+                          </div>
                         </div>
-                        <div className="grid grid-cols-3 gap-4 pt-3 border-t border-border">
-                          <div>
-                            <p className="text-xs text-muted-foreground">Equipe</p>
-                            <p className="font-semibold text-foreground">{sector.membersCount || 0}</p>
-                          </div>
-                          <div>
-                            <p className="text-xs text-muted-foreground">Score</p>
-                            <p className="font-semibold text-primary">{sector.score || 0}</p>
-                          </div>
-                          <div>
-                            <p className="text-xs text-muted-foreground">Taxa</p>
-                            <p className="font-semibold text-foreground">{sector.completionRate || 0}%</p>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </Card>
-                ))}
+                      </Card>
+                    );
+                  })}
+                {members.filter(m => m.isSectorManager || normalizeRole(m.role) === "manager").length === 0 && (
+                  <div className="col-span-2 text-center py-10 text-muted-foreground">
+                    Nenhum gestor encontrado.
+                  </div>
+                )}
               </div>
             </TabsContent>
           )}
@@ -678,7 +663,7 @@ export default function Teams() {
           <DialogContent className="sm:max-w-[500px]">
             <DialogHeader>
               <DialogTitle>
-                {role === "coordinator" ? "Adicionar Novo Colaborador" : "Adicionar Novo Usuário"}
+                {role === "manager" ? "Adicionar Novo Colaborador" : "Adicionar Novo Usuário"}
               </DialogTitle>
               <DialogDescription>
                 Preencha os dados abaixo para cadastrar um novo membro na equipe.
@@ -719,7 +704,7 @@ export default function Teams() {
                       <SelectValue placeholder="Selecione o cargo" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="coordinator">Coordenador</SelectItem>
+                      <SelectItem value="manager">Gestor</SelectItem>
                       <SelectItem value="collaborator">Colaborador</SelectItem>
                       {role === "pmo" && <SelectItem value="pmo">PMO</SelectItem>}
                     </SelectContent>
@@ -742,7 +727,7 @@ export default function Teams() {
                   <Select
                     value={formData.unidade_id}
                     onValueChange={(value) => setFormData({ ...formData, unidade_id: value, sector: "" })}
-                    disabled={isSubmitting || isLoadingSectors}
+                    disabled={isSubmitting || isLoadingSectors || role === "manager"}
                   >
                     <SelectTrigger>
                       {isLoadingSectors ? (
@@ -774,7 +759,7 @@ export default function Teams() {
                   <Select
                     value={formData.sector}
                     onValueChange={(value) => setFormData({ ...formData, sector: value })}
-                    disabled={isSubmitting || isLoadingSectors || !formData.unidade_id}
+                    disabled={isSubmitting || isLoadingSectors || !formData.unidade_id || role === "manager"}
                   >
                     <SelectTrigger>
                       {isLoadingSectors ? (
@@ -863,18 +848,18 @@ export default function Teams() {
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="coordinatorId">Coordenador (Opcional)</Label>
+                <Label htmlFor="coordinatorId">Gestor (Opcional)</Label>
                 <Select
                   value={newSectorFormData.coordenador_id}
                   onValueChange={(value) => setNewSectorFormData({ ...newSectorFormData, coordenador_id: value })}
                   disabled={isSubmitting}
                 >
                   <SelectTrigger>
-                    <SelectValue placeholder="Selecione o coordenador" />
+                    <SelectValue placeholder="Selecione o gestor" />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="none">Nenhum</SelectItem>
-                    {coordinators.map((coord) => (
+                    {managers.map((coord) => (
                       <SelectItem key={coord.id} value={coord.id.toString()}>
                         {coord.name}
                       </SelectItem>

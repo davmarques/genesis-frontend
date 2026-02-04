@@ -73,10 +73,6 @@ interface Notification {
   uploadUrl?: string;
 }
 
-const mockNotifications: Notification[] = [
-  
-];
-
 export default function Notifications() {
   const [activeTab, setActiveTab] = useState("all");
   const [showReportForm, setShowReportForm] = useState(false);
@@ -115,11 +111,11 @@ export default function Notifications() {
         );
         
         if (mySector && mySector.unidade_id) {
-          // Filtrar pela unidade do usuário atual
+          // Se tiver unidade, vê tudo da unidade (recebidas e enviadas)
           query = query.eq('unidade_id', mySector.unidade_id);
         } else if (mySector) {
-          // Fallback para setor se não tiver unidade_id vinculado
-          query = query.eq('setor_id', mySector.id);
+          // Se não tiver unidade vinculada, vê o que enviou OU o que recebeu no setor
+          query = query.or(`setor_id.eq.${mySector.id},id_setor_ref.eq.${mySector.id}`);
         } else {
           setDbNotifications([]);
           return;
@@ -240,23 +236,51 @@ export default function Notifications() {
   }, [role, userSector]);
 
   // Transformar notificações do banco para o formato da interface UI
-  const mappedNotifications: Notification[] = dbNotifications.map(n => ({
-    id: `db-${n.id}`,
-    type: "error",
-    title: n.notified ? "Reincidência" : "Notificação de Erro",
-    description: n.description,
-    timestamp: n.created_at,
-    read: false,
-    priority: "high",
-    fromSector: n.setor_ref?.nome,
-    fromUnidade: n.unidade_ref?.nome,
-    toSector: n.setor?.nome,
-    unidade: n.unidade?.nome,
-    errorType: n.notified ? "alert" : "absence",
-    status: n.status || "pending",
-    points: n.notified ? -50 : -100,
-    uploadUrl: n.upload_url
-  }));
+  const mappedNotifications: Notification[] = dbNotifications.map(n => {
+    const isFinalized = n.status === "accepted";
+    const isApproved = n.status === "approved";
+    const isRejected = n.status === "rejected";
+    const isResolved = isFinalized || isApproved || isRejected;
+
+    // Identificar relação do usuário com a notificação
+    const isOrigin = n.setor_ref?.nome?.trim().toLowerCase() === userSector.trim().toLowerCase();
+    const isTarget = n.setor?.nome?.trim().toLowerCase() === userSector.trim().toLowerCase();
+    
+    // Lógica de "Pendência de Ciência": 
+    // Se aprovado, é pendente para a origem. Se rejeitado, é pendente para o destino.
+    let isRead = isFinalized;
+    if (isApproved && !isOrigin) isRead = true; 
+    if (isRejected && !isTarget) isRead = true;
+    if (n.status === "pending" && !isTarget) isRead = true; // Pendente normal só o alvo vê
+    if (n.status === "disputed") isRead = true; // Em disputa ninguém vê como pendente "de ação" até o PMO julgar
+    
+    // Determinar o "tipo" visual (error = vermelho, success = verde, message = cinza)
+    // Se for pendente de leitura pelo usuário atual, fica vermelho (error)
+    let visualType: Notification["type"] = "error";
+    if (isRead) {
+      visualType = n.status === "rejected" ? "message" : "success";
+    }
+
+    return {
+      id: `db-${n.id}`,
+      type: visualType,
+      title: isFinalized 
+        ? (n.status === "rejected" ? "Notificação Rejeitada" : "Notificação Finalizada")
+        : (isApproved ? "Julgamento: Aprovada" : isRejected ? "Julgamento: Recusada" : (n.notified ? "Reincidência" : "Notificação de Erro")),
+      description: n.description,
+      timestamp: n.created_at,
+      read: isRead,
+      priority: isRead ? "low" : "high",
+      fromSector: n.setor_ref?.nome,
+      fromUnidade: n.unidade_ref?.nome,
+      toSector: n.setor?.nome,
+      unidade: n.unidade?.nome,
+      errorType: n.notified ? "alert" : "absence",
+      status: n.status || "pending",
+      points: n.notified ? -50 : -100,
+      uploadUrl: n.upload_url
+    };
+  });
 
   const handleUpdateStatus = async (id: string, newStatus: string) => {
     try {
@@ -269,7 +293,7 @@ export default function Notifications() {
       if (error) throw error;
       
       const statusLabels: Record<string, string> = {
-        accepted: "reconhecida",
+        accepted: "finalizada",
         disputed: "contestada",
         approved: "aprovada",
         rejected: "rejeitada"
@@ -283,7 +307,7 @@ export default function Notifications() {
     }
   };
 
-  const allNotifications = [...mockNotifications, ...mappedNotifications];
+  const allNotifications = mappedNotifications;
 
   // Filtrar setores para o formulário de notificação
   const filteredSectors = role === "pmo"
@@ -414,7 +438,7 @@ export default function Notifications() {
   const getSubtitle = () => {
     switch (role) {
       case "pmo": return "Todas as notificações e disputas pendentes";
-      case "coordinator": return "Notificações do setor e erros reportados";
+      case "manager": return "Notificações do setor e erros reportados";
       case "collaborator": return "Suas notificações e tarefas";
     }
   };
@@ -503,7 +527,11 @@ export default function Notifications() {
   };
 
   const unreadCount = allNotifications.filter(n => !n.read).length;
-  const disputeCount = allNotifications.filter(n => n.status === "disputed" || n.status === "pending").length;
+  // disputeCount para o PMO = disputas aguardando julgamento
+  // para o Gestor = tudo que exige ação/ciência (Não lidas)
+  const disputeCount = role === "pmo" 
+    ? allNotifications.filter(n => n.status === "disputed").length
+    : unreadCount;
 
   return (
     <AppLayout title="Notificações" subtitle={getSubtitle()}>
@@ -539,7 +567,7 @@ export default function Notifications() {
                 <Gavel className="w-5 h-5 text-warning" />
               </div>
               <div>
-                <p className="text-sm text-muted-foreground">Disputas/Pendentes</p>
+                <p className="text-sm text-muted-foreground">{role === "pmo" ? "Disputas" : "Pendentes"}</p>
                 <p className="text-2xl font-bold text-foreground">{disputeCount}</p>
               </div>
             </div>
@@ -568,8 +596,10 @@ export default function Notifications() {
             <TabsList>
               <TabsTrigger value="all">Todas ({allNotifications.length})</TabsTrigger>
               <TabsTrigger value="unread">Não Lidas ({unreadCount})</TabsTrigger>
-              {(role === "pmo" || role === "coordinator") && (
-                <TabsTrigger value="disputes">Disputas ({disputeCount})</TabsTrigger>
+              {(role === "pmo" || role === "manager") && (
+                <TabsTrigger value="disputes">
+                  {role === "pmo" ? `Disputas (${disputeCount})` : `Pendentes (${disputeCount})`}
+                </TabsTrigger>
               )}
             </TabsList>
 
@@ -723,7 +753,10 @@ export default function Notifications() {
               {allNotifications
                 .filter(n => {
                   if (activeTab === "unread") return !n.read;
-                  if (activeTab === "disputes") return n.status === "disputed" || n.status === "pending";
+                  if (activeTab === "disputes") {
+                    if (role === "pmo") return n.status === "disputed";
+                    return !n.read;
+                  }
                   return true;
                 })
                 .map((notification) => (
@@ -787,10 +820,12 @@ export default function Notifications() {
                               <Badge variant="outline" className={
                                 notification.status === "pending" ? "bg-warning/10 text-warning border-warning/30" :
                                   notification.status === "disputed" ? "bg-destructive/10 text-destructive border-destructive/30" :
-                                    "bg-success/10 text-success border-success/30"
+                                    notification.status === "rejected" ? "bg-muted text-muted-foreground border-muted" :
+                                      "bg-success/10 text-success border-success/30"
                               }>
                                 {notification.status === "pending" ? "Pendente" :
-                                  notification.status === "disputed" ? "Em Disputa" : "Aceito"}
+                                  notification.status === "disputed" ? "Em Disputa" :
+                                    notification.status === "rejected" ? "Rejeitada" : "Finalizada"}
                               </Badge>
                             )}
                             <span className="text-xs text-muted-foreground">
@@ -826,7 +861,7 @@ export default function Notifications() {
                                 size="sm" 
                                 variant="outline" 
                                 className="text-success border-success/30 hover:bg-success/10"
-                                onClick={() => handleUpdateStatus(notification.id, "accepted")}
+                                onClick={() => handleUpdateStatus(notification.id, "approved")}
                               >
                                 Aprovar
                               </Button>
@@ -836,9 +871,21 @@ export default function Notifications() {
                                 className="text-destructive border-destructive/30 hover:bg-destructive/10"
                                 onClick={() => handleUpdateStatus(notification.id, "rejected")}
                               >
-                                Rejeitar
+                                Recusar
                               </Button>
                             </>
+                          )}
+                          {/* Botão de ciência após julgamento (Arquivar) */}
+                          {((notification.status === "approved" && notification.fromSector?.trim().toLowerCase() === userSector.trim().toLowerCase()) ||
+                            (notification.status === "rejected" && notification.toSector?.trim().toLowerCase() === userSector.trim().toLowerCase())) && (
+                              <Button 
+                                size="sm" 
+                                variant="outline" 
+                                className="bg-primary/10 text-primary border-primary/30 hover:bg-primary/20"
+                                onClick={() => handleUpdateStatus(notification.id, "accepted")}
+                              >
+                                Arquivar Notificação
+                              </Button>
                           )}
                           <Button 
                             variant="ghost" 

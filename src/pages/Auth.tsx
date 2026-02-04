@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
-import { useRole } from "@/contexts/RoleContext";
+import { useRole, normalizeRole } from "@/contexts/RoleContext";
 import { Lock, Mail, Loader2 } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 import { supabase } from "@/lib/supabase";
@@ -78,8 +78,7 @@ export default function AuthPage() {
           .single();
 
         // Mapear role
-        let userRole = dbUser?.role || metadata?.role || (cleanEmail.includes('admin') ? 'pmo' : 'coordinator');
-        if (userRole === 'manager') userRole = 'coordinator';
+        const userRole = normalizeRole(dbUser?.role || metadata?.role || (cleanEmail.includes('admin') ? 'pmo' : 'manager'));
         
         const userData = {
           id: authData.user.id,
@@ -91,7 +90,7 @@ export default function AuthPage() {
           setor_id: dbUser?.setor_id || null
         };
 
-        setRole(userRole as any);
+        setRole(userRole);
         setUserName(userData.name);
         setUserSector(userData.sector);
         setUserUnitId(userData.unidade_id);
@@ -129,13 +128,19 @@ export default function AuthPage() {
         }
 
         setIsLocalAuth(true);
-        setRole(data.user.role);
+        const normalizedRole = normalizeRole(data.user.role);
+        setRole(normalizedRole);
         setUserName(data.user.name);
         setUserSector(data.user.sector || "Setor Geral");
         setUserUnitId((data.user as any).unidade_id || null);
         setUserSectorId((data.user as any).setor_id || null);
+        
+        const userDataForStorage = {
+          ...data.user,
+          role: normalizedRole
+        };
         localStorage.setItem("genesis_token", data.token);
-        localStorage.setItem("genesis_user", JSON.stringify(data.user));
+        localStorage.setItem("genesis_user", JSON.stringify(userDataForStorage));
         
         toast({
           title: "Bem-vindo de volta!",
@@ -145,18 +150,6 @@ export default function AuthPage() {
         return;
       } catch (apiError: any) {
         console.error("Backend auth also failed:", apiError.message);
-        // 3. Fallback final para admin123 (Desenvolvimento)
-        // Se usar a senha padrão, mesmo no mock, pedimos reset
-        if (cleanEmail === "admin@genesis.com" && password === "admin123") {
-          setIsLocalAuth(true);
-          setMustResetPassword(true);
-          toast({
-            title: "Primeiro Acesso (Mock)",
-            description: "Por favor, defina uma nova senha.",
-          });
-          setIsLoading(false);
-          return;
-        }
 
         toast({
           variant: "destructive",
@@ -412,7 +405,7 @@ export default function AuthPage() {
         </Card>
 
         <p className="text-center text-sm text-muted-foreground">
-          Ainda não tem acesso? Contate o seu Coordenador ou PMO.
+          Ainda não tem acesso? Contate o seu Gestor ou PMO.
         </p>
       </div>
     </div>

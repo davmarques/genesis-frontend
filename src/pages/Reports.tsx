@@ -31,46 +31,120 @@ import {
   Filter,
   FileText,
   AlertCircle,
-  CheckCircle2
+  CheckCircle2,
+  Loader2
 } from "lucide-react";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { useRole } from "@/contexts/RoleContext";
+import { useState, useEffect } from "react";
+import { supabase } from "@/lib/supabase";
+import { apiFetch } from "@/lib/api";
 
 export default function Reports() {
-  const { role, userSector } = useRole();
+  const { role, userSector, userSectorId } = useRole();
+  const [isLoading, setIsLoading] = useState(true);
+  const [scoringBreakdown, setScoringBreakdown] = useState<any[]>([]);
+  const [chartData, setChartData] = useState<any[]>([]);
+  const [sectorData, setSectorData] = useState<any[]>([]);
+  const [stats, setStats] = useState({
+    totalTasks: 0,
+    performanceRate: 0,
+    totalPoints: 0
+  });
 
   const getSubtitle = () => {
     switch (role) {
       case "pmo": return "Análises e insights de todos os setores";
-      case "coordinator": return `Relatórios do setor ${userSector}`;
+      case "manager": return `Relatórios do setor ${userSector}`;
       default: return "Seus relatórios de desempenho";
     }
   };
 
-  // Mock data for scoring breakdown
-  const scoringBreakdown = [
-    { action: "Pontos Vitais (Novas Atividades)", count: 3, points: 300, type: "positive" },
-    { action: "Pontos de Auditoria", count: 5, points: 250, type: "positive" },
-    { action: "Notificações de Alerta", count: 2, points: -100, type: "negative" },
-    { action: "Notificações de Ausência", count: 1, points: -100, type: "negative" },
-  ];
+  useEffect(() => {
+    fetchReportData();
+  }, [userSector, role]);
 
-  const chartData = [
-    { month: "Jan", points: 2400, tasks: 400 },
-    { month: "Fev", points: 1398, tasks: 300 },
-    { month: "Mar", points: 9800, tasks: 200 },
-    { month: "Abr", points: 3908, tasks: 278 },
-    { month: "Mai", points: 4800, tasks: 189 },
-    { month: "Jun", points: 3800, tasks: 239 },
-  ];
+  const fetchReportData = async () => {
+    try {
+      setIsLoading(true);
+      
+      const [allSectors, allNotifications] = await Promise.all([
+        apiFetch("/admin/sectors").catch(() => []),
+        supabase.from('notificacoes').select('*')
+      ]);
 
-  const sectorData = [
-    { sector: "Oncologia", points: 3845 },
-    { sector: "Faturamento", points: 3720 },
-    { sector: "UTI Adulto", points: 3580 },
-    { sector: "Pediatria", points: 3420 },
-    { sector: "Internação", points: 3210 },
-  ];
+      const sectorsList = Array.isArray(allSectors) ? allSectors : [];
+      const notifications = allNotifications.data || [];
+
+      // Filtrar por setor se for manager
+      const mySectorObj = sectorsList.find((s: any) => 
+        s.nome.trim().toLowerCase() === userSector.trim().toLowerCase()
+      );
+
+      let filteredNotifications = notifications;
+      let targetSectors = sectorsList;
+
+      if (role !== "pmo" && mySectorObj) {
+        filteredNotifications = notifications.filter((n: any) => 
+          n.setor_id === mySectorObj.id || n.id_setor_ref === mySectorObj.id
+        );
+        targetSectors = sectorsList.filter((s: any) => s.id === mySectorObj.id);
+      }
+
+      // 1. Scoring Breakdown
+      const vitalIndices = filteredNotifications.filter((n: any) => n.id_setor_ref && !n.notified).length;
+      const auditPoints = filteredNotifications.filter((n: any) => n.id_setor_ref).length;
+      const alerts = filteredNotifications.filter((n: any) => n.setor_id && n.notified).length;
+      const absences = filteredNotifications.filter((n: any) => n.setor_id && !n.notified && n.tipo_erro === 'ausência').length;
+
+      setScoringBreakdown([
+        { action: "Atividades Concluídas", count: auditPoints, points: auditPoints * 50, type: "positive" },
+        { action: "Notificações de Alerta", count: alerts, points: alerts * -50, type: "negative" },
+        { action: "Notificações de Ausência", count: absences, points: absences * -100, type: "negative" },
+      ]);
+
+      // 2. Sector Data
+      const sData = targetSectors.map((s: any) => {
+        const sectorPoints = notifications.reduce((acc: number, n: any) => {
+          if (n.id_setor_ref === s.id) return acc + 50;
+          if (n.setor_id === s.id) return acc + (n.notified ? -50 : -100);
+          return acc;
+        }, 0);
+        return { sector: s.nome, points: sectorPoints };
+      }).sort((a: any, b: any) => b.points - a.points).slice(0, 5);
+      
+      setSectorData(sData);
+
+      // 3. Stats
+      const totalPoints = filteredNotifications.reduce((acc: number, n: any) => {
+        if (mySectorObj && n.id_setor_ref === mySectorObj.id) return acc + 50;
+        if (mySectorObj && n.setor_id === mySectorObj.id) return acc + (n.notified ? -50 : -100);
+        if (role === 'pmo') return acc + (n.id_setor_ref ? 50 : 0);
+        return acc;
+      }, 0);
+
+      setStats({
+        totalTasks: auditPoints,
+        performanceRate: 94.2, // Placeholder for real calculation
+        totalPoints: totalPoints
+      });
+
+      // 4. Chart Data (Last 6 months placeholder but with real structure)
+      setChartData([
+        { month: "Jan", points: 2400, tasks: 400 },
+        { month: "Fev", points: 1398, tasks: 300 },
+        { month: "Mar", points: 9800, tasks: 200 },
+        { month: "Abr", points: 3908, tasks: 278 },
+        { month: "Mai", points: 4800, tasks: 189 },
+        { month: "Jun", points: totalPoints, tasks: auditPoints },
+      ]);
+
+    } catch (error) {
+      console.error("Erro ao carregar relatórios:", error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   const chartConfig = {
     points: {
@@ -86,6 +160,16 @@ export default function Reports() {
   const totalPositive = scoringBreakdown.filter(s => s.type === "positive").reduce((acc, s) => acc + s.points, 0);
   const totalNegative = scoringBreakdown.filter(s => s.type === "negative").reduce((acc, s) => acc + s.points, 0);
   const totalScore = totalPositive + totalNegative;
+
+  if (isLoading) {
+    return (
+      <AppLayout title="Relatórios" subtitle={getSubtitle()}>
+        <div className="flex items-center justify-center h-[60vh]">
+          <Loader2 className="w-8 h-8 animate-spin text-primary" />
+        </div>
+      </AppLayout>
+    );
+  }
 
   return (
     <AppLayout title="Relatórios" subtitle={getSubtitle()}>
@@ -122,7 +206,7 @@ export default function Reports() {
             </div>
             <p className="text-sm text-muted-foreground mb-1">Tarefas Concluídas</p>
             <p className="text-3xl font-bold text-foreground">
-              {role === "pmo" ? "1,247" : role === "coordinator" ? "127" : "28"}
+              {stats.totalTasks}
             </p>
             <p className="text-xs text-muted-foreground mt-1">vs. mês anterior</p>
           </Card>
@@ -138,7 +222,7 @@ export default function Reports() {
               </Badge>
             </div>
             <p className="text-sm text-muted-foreground mb-1">Taxa de Aproveitamento</p>
-            <p className="text-3xl font-bold text-foreground">94.2%</p>
+            <p className="text-3xl font-bold text-foreground">{stats.performanceRate}%</p>
             <p className="text-xs text-muted-foreground mt-1">vs. mês anterior</p>
           </Card>
 
@@ -154,7 +238,7 @@ export default function Reports() {
             </div>
             <p className="text-sm text-muted-foreground mb-1">Pontos Totais</p>
             <p className="text-3xl font-bold text-foreground">
-              {role === "pmo" ? "45,890" : role === "coordinator" ? "3,845" : "1,270"}
+              {stats.totalPoints.toLocaleString()}
             </p>
             <p className="text-xs text-muted-foreground mt-1">vs. mês anterior</p>
           </Card>
@@ -342,13 +426,7 @@ export default function Reports() {
               <Card className="p-6">
                 <h3 className="text-xl font-bold text-foreground mb-4">Top 5 Setores</h3>
                 <div className="space-y-3">
-                  {[
-                    { sector: "Oncologia", points: 3845, tasks: 127, rate: 96 },
-                    { sector: "Faturamento", points: 3720, tasks: 115, rate: 94 },
-                    { sector: "UTI Adulto", points: 3580, tasks: 142, rate: 91 },
-                    { sector: "Pediatria", points: 3420, tasks: 98, rate: 95 },
-                    { sector: "Central de Internação", points: 3210, tasks: 89, rate: 93 },
-                  ].map((sector, index) => (
+                  {sectorData.map((sector, index) => (
                     <div key={sector.sector} className="flex items-center gap-4 p-4 rounded-lg border border-border hover:border-primary/50 transition-all">
                       <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold ${
                         index === 0 ? "bg-gradient-to-r from-gold to-warning text-gold-foreground" :
@@ -360,8 +438,8 @@ export default function Reports() {
                       <div className="flex-1">
                         <p className="font-semibold text-foreground">{sector.sector}</p>
                         <div className="flex items-center gap-4 text-sm text-muted-foreground mt-1">
-                          <span>{sector.tasks} tarefas</span>
-                          <span>{sector.rate}% conclusão</span>
+                          <span>{sector.points / 50} tarefas</span>
+                          <span>94% conclusão</span>
                         </div>
                       </div>
                       <Badge className="bg-primary/10 text-primary border-primary/30 font-bold">

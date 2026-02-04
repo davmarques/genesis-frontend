@@ -78,28 +78,20 @@ const Dashboard = () => {
           s.nome?.trim().toLowerCase() === userSector?.trim().toLowerCase()
         );
 
-        // Se não for PMO, filtrar tudo pela unidade do usuário
+        // Se não for PMO, filtrar tudo pelo SETOR do usuário (Pedido do usuário: view baseada no setor)
         if (role !== "pmo" && currentUserSectorObj) {
-          if (currentUserSectorObj.unidade_id) {
-            const unitId = currentUserSectorObj.unidade_id;
-            sectorsList = sectorsList.filter(s => s.unidade_id === unitId);
-            
-            // Filtrar membros que pertencem aos setores desta unidade
-            const unitSectorNames = sectorsList.map(s => s.nome?.trim().toLowerCase());
-            membersList = membersList.filter(m => 
-              m.sector && unitSectorNames.includes(m.sector.trim().toLowerCase())
-            );
+          // Managers agora vêem apenas seu próprio setor para gestão
+          sectorsList = sectorsList.filter(s => s.id === currentUserSectorObj.id);
+          
+          // Filtrar membros que pertencem a este setor específico
+          membersList = membersList.filter(m => 
+            m.sector && m.sector.trim().toLowerCase() === userSector?.trim().toLowerCase()
+          );
 
-            // Filtrar notificações desta unidade (origem ou destino)
-            notificationsList = notificationsList.filter(n => n.unidade_id === unitId);
-          } else {
-            // Fallback para apenas o setor se não houver unidade
-            sectorsList = sectorsList.filter(s => s.id === currentUserSectorObj.id);
-            membersList = membersList.filter(m => m.sector === userSector);
-            notificationsList = notificationsList.filter(n => 
-              n.setor_id === currentUserSectorObj.id || n.id_setor_ref === currentUserSectorObj.id
-            );
-          }
+          // Filtrar notificações deste setor (origem ou destino)
+          notificationsList = notificationsList.filter(n => 
+            n.setor_id === currentUserSectorObj.id || n.id_setor_ref === currentUserSectorObj.id
+          );
         }
 
         const pmoStats = {
@@ -158,7 +150,7 @@ const Dashboard = () => {
           userPoints: 0,
           userNotices: sectorNotifications.length,
           pendingChecklists: pendingNotices,
-          completionRate: "92%"
+          completionRate: "0%"
         }));
 
         setStats(prev => ({
@@ -169,7 +161,7 @@ const Dashboard = () => {
           userPoints: 0, // Iniciando em 0
           userNotices: sectorNotifications.length,
           pendingChecklists: pendingNotices,
-          completionRate: "92%" // Mockado por enquanto
+          completionRate: "0%" 
         }));
 
       } catch (error) {
@@ -185,7 +177,7 @@ const Dashboard = () => {
   const getSubtitle = () => {
     switch (role) {
       case "pmo": return "Visão geral de todos os setores";
-      case "coordinator": return `Gestão do setor ${userSector}`;
+      case "manager": return `Gestão do setor ${userSector}`;
       case "collaborator": return "Suas atividades e tarefas";
     }
   };
@@ -375,10 +367,10 @@ const Dashboard = () => {
           </div>
         )}
 
-            {/* Coordinator Dashboard */}
-            {role === "coordinator" && (
+            {/* Manager Dashboard */}
+            {role === "manager" && (
               <div className="space-y-6">
-                {/* Coordinator Stats */}
+                {/* Manager Stats */}
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                   <ScoreCard
                     title="Score do Setor"
@@ -410,7 +402,7 @@ const Dashboard = () => {
                   />
                 </div>
 
-            {/* Quick Actions for Coordinator */}
+            {/* Quick Actions for Manager */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <Card className="p-4 border-dashed border-2 hover:border-primary/50 cursor-pointer transition-all group">
                 <div className="flex items-center gap-3">
@@ -447,7 +439,7 @@ const Dashboard = () => {
               </Card>
             </div>
 
-            {/* Coordinator Tabs */}
+            {/* Manager Tabs */}
             <Tabs defaultValue="checklist" className="space-y-4">
               <TabsList className="bg-muted">
                 <TabsTrigger value="checklist">Checklist do Setor</TabsTrigger>
@@ -457,7 +449,7 @@ const Dashboard = () => {
               </TabsList>
 
               <TabsContent value="checklist" className="space-y-4">
-                <ChecklistManager role="coordinator" />
+                <ChecklistManager role="manager" />
               </TabsContent>
 
               <TabsContent value="team" className="space-y-4">
@@ -465,7 +457,7 @@ const Dashboard = () => {
               </TabsContent>
 
               <TabsContent value="notifications" className="space-y-4">
-                <NotificationPanel role="coordinator" />
+                <NotificationPanel role="manager" />
               </TabsContent>
 
               <TabsContent value="pendencies" className="space-y-4">

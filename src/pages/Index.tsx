@@ -104,7 +104,7 @@ const Index = () => {
               </div>
               <h3 className="text-xl font-semibold text-foreground mb-2">Gestão de Equipes</h3>
               <p className="text-muted-foreground">
-                Três perfis de acesso (PMO, Coordenador, Colaborador) com funcionalidades específicas para cada papel.
+                Três perfis de acesso (PMO, Gestor, Colaborador) com funcionalidades específicas para cada papel.
               </p>
             </Card>
 
@@ -234,7 +234,7 @@ const Index = () => {
               <div className="w-16 h-16 bg-gradient-to-br from-secondary to-accent rounded-full flex items-center justify-center mx-auto mb-4">
                 <Users className="w-8 h-8 text-secondary-foreground" />
               </div>
-              <h3 className="text-xl font-bold text-foreground mb-2">Coordenador</h3>
+              <h3 className="text-xl font-bold text-foreground mb-2">Gestor</h3>
               <p className="text-sm text-muted-foreground mb-4">Responsável do Setor</p>
               <ul className="text-sm text-left space-y-2 text-muted-foreground">
                 <li className="flex items-start gap-2">

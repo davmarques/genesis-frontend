@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, ReactNode } from "react";
 
-export type UserRole = "pmo" | "coordinator" | "collaborator";
+export type UserRole = "pmo" | "manager" | "collaborator";
 
 interface RoleContextType {
   role: UserRole;
@@ -29,8 +29,17 @@ interface RoleContextType {
 
 const RoleContext = createContext<RoleContextType | undefined>(undefined);
 
+export const normalizeRole = (role: string): UserRole => {
+  if (!role) return "pmo";
+  const r = role.toLowerCase();
+  if (r === "pmo") return "pmo";
+  if (r === "manager" || r === "coordinator" || r === "coordenador" || r === "gestor") return "manager";
+  if (r === "collaborator" || r === "colaborador") return "collaborator";
+  return "pmo"; // Default
+};
+
 const getRolePermissions = (role: UserRole) => {
-  switch (role) {
+  switch (normalizeRole(role)) {
     case "pmo":
       return {
         canValidateChecklists: true,
@@ -43,11 +52,11 @@ const getRolePermissions = (role: UserRole) => {
         canExportReports: true,
         canImportChecklists: true,
       };
-    case "coordinator":
+    case "manager":
       return {
         canValidateChecklists: true,
         canJudgeDisputes: false,
-        canManageUsers: false,
+        canManageUsers: true,
         canManageSectors: false,
         canReportErrors: true,
         canAssignTasks: true,
@@ -70,29 +79,18 @@ const getRolePermissions = (role: UserRole) => {
   }
 };
 
-const getRoleInfo = (role: UserRole) => {
-  switch (role) {
-    case "pmo":
-      return { userName: "Dr. Carlos Mendes", userSector: "Administração Central" };
-    case "coordinator":
-      return { userName: "Dra. Maria Santos", userSector: "Cardiologia" };
-    case "collaborator":
-      return { userName: "João Silva", userSector: "UTI" };
-  }
-};
-
 export function RoleProvider({ children }: { children: ReactNode }) {
   const [role, setRoleState] = useState<UserRole>(() => {
     const saved = localStorage.getItem("genesis_user");
     if (saved) {
       try {
         const user = JSON.parse(saved);
-        return user.role || "pmo";
+        return normalizeRole(user.role);
       } catch (e) {
-        return "pmo";
+        return "collaborator"; // Default mais seguro se der erro
       }
     }
-    return "pmo";
+    return "collaborator"; // Default inicial seguro
   });
 
   const [userName, setUserName] = useState(() => {
@@ -105,7 +103,7 @@ export function RoleProvider({ children }: { children: ReactNode }) {
         return "Usuário";
       }
     }
-    return "Dr. Carlos Mendes";
+    return "";
   });
 
   const [userSector, setUserSector] = useState(() => {
@@ -113,12 +111,12 @@ export function RoleProvider({ children }: { children: ReactNode }) {
     if (saved) {
       try {
         const user = JSON.parse(saved);
-        return user.sector || "Administração";
+        return user.sector || "";
       } catch (e) {
-        return "Administração";
+        return "";
       }
     }
-    return "Administração Central";
+    return "";
   });
 
   const [userUnitId, setUserUnitId] = useState<string | null>(() => {
@@ -148,13 +146,7 @@ export function RoleProvider({ children }: { children: ReactNode }) {
   });
 
   const setRole = (newRole: UserRole) => {
-    setRoleState(newRole);
-    // Para fins de demo, as iniciais mudam com o cargo se não houver um usuário real
-    if (!localStorage.getItem("genesis_user")) {
-      const info = getRoleInfo(newRole);
-      setUserName(info.userName);
-      setUserSector(info.userSector);
-    }
+    setRoleState(normalizeRole(newRole));
   };
 
   const isAuthenticated = !!localStorage.getItem("genesis_token") || !!localStorage.getItem("genesis_user");

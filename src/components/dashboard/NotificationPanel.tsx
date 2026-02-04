@@ -22,7 +22,7 @@ interface Notification {
 }
 
 interface NotificationPanelProps {
-  role: "pmo" | "coordinator";
+  role: "pmo" | "manager";
 }
 
 export const NotificationPanel = ({ role: componentRole }: NotificationPanelProps) => {
@@ -40,12 +40,16 @@ export const NotificationPanel = ({ role: componentRole }: NotificationPanelProp
       
       // Buscar unidade do usuário se não for PMO
       let unitIdToFilter = null;
+      let sectorIdToFilter = null;
       if (role !== "pmo") {
         const sectors = await apiFetch("/admin/sectors").catch(() => []);
         const mySector = sectors.find((s: any) => 
           s.nome.trim().toLowerCase() === userSector.trim().toLowerCase()
         );
-        if (mySector) unitIdToFilter = mySector.unidade_id;
+        if (mySector) {
+          unitIdToFilter = mySector.unidade_id;
+          sectorIdToFilter = mySector.id;
+        }
       }
 
       let query = supabase
@@ -60,8 +64,19 @@ export const NotificationPanel = ({ role: componentRole }: NotificationPanelProp
         .order("created_at", { ascending: false })
         .limit(5);
 
-      if (unitIdToFilter) {
-        query = query.eq('unidade_id', unitIdToFilter);
+      if (role !== "pmo") {
+        if (sectorIdToFilter) {
+          // Filtro por setor (Pedido do usuário): vê o que enviou OU o que recebeu no seu setor específico
+          query = query.or(`setor_id.eq.${sectorIdToFilter},id_setor_ref.eq.${sectorIdToFilter}`);
+        } else if (unitIdToFilter) {
+          // Fallback para unidade apenas se não houver setor
+          query = query.eq('unidade_id', unitIdToFilter);
+        } else {
+          // Usuário sem setor/unidade identificado
+          setNotifications([]);
+          setIsLoading(false);
+          return;
+        }
       }
 
       const { data, error } = await query;

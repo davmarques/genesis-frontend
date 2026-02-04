@@ -43,14 +43,15 @@ export function AppLayout({ children, title, subtitle }: AppLayoutProps) {
     const fetchDisputeCount = async () => {
       try {
         console.log("Fetching dispute count...");
-        let query = supabase.from('notificacoes').select('status, unidade_id, setor_id');
+        let query = supabase.from('notificacoes').select('status, unidade_id, setor_id, id_setor_ref');
         
-        // Se não for PMO, filtramos por unidade ou setor
+        // Se não for PMO, filtramos pelo SETOR (Pedido do usuário: visão baseada no setor)
         if (role !== 'pmo') {
-          if (userUnitId) {
+          if (userSectorId) {
+            // Prioriza o setor para restringir a visão conforme pedido
+            query = query.or(`setor_id.eq.${userSectorId},id_setor_ref.eq.${userSectorId}`);
+          } else if (userUnitId) {
             query = query.eq('unidade_id', userUnitId);
-          } else if (userSectorId) {
-            query = query.eq('setor_id', userSectorId);
           }
         }
 
@@ -63,10 +64,26 @@ export function AppLayout({ children, title, subtitle }: AppLayoutProps) {
 
         if (!data) return;
 
-        const pendingStatus = ['disputed', 'contestada', 'pending', 'pendente'];
         const count = data.filter(n => {
-          const s = n.status?.toLowerCase().trim();
-          return !s || pendingStatus.includes(s);
+          const status = n.status?.toLowerCase().trim() || 'pending';
+          const myId = typeof userSectorId === 'string' ? parseInt(userSectorId) : userSectorId;
+
+          if (role === 'pmo') {
+            // PMO vê apenas o que está em disputa (aguardando julgamento)
+            return status === 'disputed' || status === 'contestada';
+          } else {
+            if (!myId) return false;
+            // Gestor vê o que está pendente para o SEU setor reconhecer
+            // OU o que voltou do PMO para ele (Aprovado volta para origem, Rejeitado volta para destino)
+            const isToMySector = n.setor_id === myId;
+            const isFromMySector = n.id_setor_ref === myId;
+
+            if (status === 'pending' || status === 'pendente') return isToMySector;
+            if (status === 'approved') return isFromMySector; // Volta para origem
+            if (status === 'rejected') return isToMySector;   // Volta para destinatário
+            
+            return false;
+          }
         }).length;
 
         console.log("Dispute count fetched:", count);
