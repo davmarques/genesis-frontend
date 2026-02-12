@@ -3,10 +3,20 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Plus, CheckCircle2, Clock, AlertCircle, Star, Loader2 } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { 
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Plus, CheckCircle2, Clock, AlertCircle, Star, Loader2, Send } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { supabase } from "@/lib/supabase";
+import { apiFetch } from "@/lib/api";
 import { useRole } from "@/contexts/RoleContext";
+import { useToast } from "@/hooks/use-toast";
 
 interface ChecklistItem {
   id: string;
@@ -26,9 +36,55 @@ interface ChecklistManagerProps {
 export const ChecklistManager = ({ role: componentRole }: ChecklistManagerProps) => {
   const [items, setItems] = useState<ChecklistItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const { role, userSectorId } = useRole();
+  const [sectors, setSectors] = useState<any[]>([]);
+  const [selectedSectorId, setSelectedSectorId] = useState<string | null>(null);
+  const [newActivityTitle, setNewActivityTitle] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  
+  const { role, userSectorId, userUnitId } = useRole();
+  const { toast } = useToast();
+
+  // Inicializar o setor selecionado com o setor do usuário, se houver
+  useEffect(() => {
+    if (userSectorId) {
+      setSelectedSectorId(userSectorId.toString());
+    }
+  }, [userSectorId]);
+
+  const fetchSectors = async () => {
+    try {
+      // Tentar buscar do banco via Supabase
+      let query = supabase.from('setor').select('id, nome');
+      if (role !== 'pmo' && userUnitId) {
+        query = query.eq('unidade_id', userUnitId);
+      }
+      const { data, error } = await query.order('nome');
+      
+      if (error) {
+        console.error("Erro Supabase ao buscar setores:", error);
+        // Fallback para apiFetch se disponível e erro de permissão
+        const apiSectors = await apiFetch("/admin/sectors").catch(() => []);
+        if (apiSectors && Array.isArray(apiSectors)) {
+          setSectors(apiSectors.map((s: any) => ({ id: s.id, nome: s.nome || s.name })));
+          return;
+        }
+        throw error;
+      };
+
+      setSectors(data || []);
+      
+      // Se tiver setores mas nenhum selecionado, e o usuário tiver um setor vinculado
+      if (data && data.length > 0 && !selectedSectorId && userSectorId) {
+        setSelectedSectorId(userSectorId.toString());
+      }
+    } catch (error) {
+      console.error("Erro geral ao carregar setores:", error);
+    }
+  };
 
   const fetchChecklists = async () => {
+    if (!selectedSectorId && role !== 'pmo') return;
+    
     try {
       setIsLoading(true);
       let query = supabase
@@ -36,7 +92,9 @@ export const ChecklistManager = ({ role: componentRole }: ChecklistManagerProps)
         .select('*')
         .order('created_at', { ascending: false });
 
-      if (role !== 'pmo' && userSectorId) {
+      if (selectedSectorId) {
+        query = query.eq('setor_id', selectedSectorId);
+      } else if (role !== 'pmo' && userSectorId) {
         query = query.eq('setor_id', userSectorId);
       }
 
@@ -45,13 +103,13 @@ export const ChecklistManager = ({ role: componentRole }: ChecklistManagerProps)
 
       const formatted = (data || []).map(item => ({
         id: item.id.toString(),
-        title: item.title,
-        description: item.description,
+        title: item.title || item.titulo, // Suporte a ambos os nomes de coluna caso variem
+        description: item.description || '',
         points: item.points || 0,
         status: (item.status === 'completed' ? 'completed' : 
                  item.status === 'overdue' ? 'overdue' : 'pending'),
         priority: item.priority || 'medium',
-        dueDate: item.dueDate ? new Date(item.dueDate).toLocaleDateString('pt-BR') : 'Sem data'
+        dueDate: item.dueDate || item.created_at ? new Date(item.dueDate || item.created_at).toLocaleDateString('pt-BR') : 'Sem data'
       }));
 
       setItems(formatted as ChecklistItem[]);
@@ -63,8 +121,67 @@ export const ChecklistManager = ({ role: componentRole }: ChecklistManagerProps)
   };
 
   useEffect(() => {
+    fetchSectors();
+  }, []);
+
+  useEffect(() => {
     fetchChecklists();
-  }, [userSectorId, role]);
+  }, [selectedSectorId, role, userSectorId]);
+
+  const handleAddActivity = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!newActivityTitle.trim() || !selectedSectorId) {
+      toast({
+        title: "Aviso",
+        description: "Digite o título da atividade e selecione um setor.",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      const { data, error } = await supabase
+        .from('checklist')
+        .insert({
+          title: newActivityTitle,
+          titulo: newActivityTitle, // Inserindo em ambos para garantir
+          setor_id: selectedSectorId ? Number(selectedSectorId) : null,
+          status: 'pending',
+          points: 100, // Pontuação padrão para novas atividades "Pontos Vitais"
+          priority: 'medium'
+        })
+        .select();
+
+      if (error) throw error;
+
+      // Registrar ganho de pontos por melhoria proativa
+      await supabase.from('notificacoes').insert({
+        setor_id: Number(selectedSectorId),
+        unidade_id: Number(userUnitId) || null,
+        description: `Melhoria proativa: Inclusão de "${newActivityTitle}" no checklist.`,
+        status: 'accepted',
+        nao_no_checklist: true,
+        created_at: new Date().toISOString()
+      });
+
+      toast({
+        title: "Sucesso (+100 pts)",
+        description: "Atividade cadastrada e pontos creditados!",
+      });
+      
+      setNewActivityTitle("");
+      fetchChecklists();
+    } catch (error: any) {
+      toast({
+        title: "Erro ao cadastrar",
+        description: error.message,
+        variant: "destructive"
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   const toggleItem = async (id: string, currentStatus: string) => {
     const newStatus = currentStatus === "completed" ? "pending" : "completed";
@@ -106,20 +223,53 @@ export const ChecklistManager = ({ role: componentRole }: ChecklistManagerProps)
 
   return (
     <Card className="p-6">
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h3 className="text-xl font-bold text-foreground">
-            {role === "collaborator" ? "Minhas Atividades" : "Checklist do Setor"}
-          </h3>
-          <p className="text-sm text-muted-foreground mt-1">
-            {isLoading ? "Carregando..." : `${items.filter(i => i.status === "pending").length} atividades pendentes`}
-          </p>
+      <div className="flex flex-col gap-6 mb-6">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div>
+            <h3 className="text-xl font-bold text-foreground">
+              {role === "collaborator" ? "Minhas Atividades" : "Checklist do Setor"}
+            </h3>
+            <p className="text-sm text-muted-foreground mt-1">
+              {isLoading ? "Carregando..." : `${items.filter(i => i.status === "pending").length} atividades pendentes`}
+            </p>
+          </div>
+
+          <div className="w-full md:w-64">
+            <Select 
+              value={selectedSectorId || ""} 
+              onValueChange={setSelectedSectorId}
+            >
+              <SelectTrigger className="bg-background">
+                <SelectValue placeholder={sectors.length === 0 ? "Carregando setores..." : "Selecionar Setor"} />
+              </SelectTrigger>
+              <SelectContent>
+                {sectors.length === 0 ? (
+                  <SelectItem value="none" disabled>Nenhum setor encontrado</SelectItem>
+                ) : (
+                  sectors.map((s) => (
+                    <SelectItem key={s.id} value={s.id.toString()}>
+                      {s.nome}
+                    </SelectItem>
+                  ))
+                )}
+              </SelectContent>
+            </Select>
+          </div>
         </div>
+
         {(role === "manager" || role === "pmo") && (
-          <Button className="gap-2 bg-primary hover:bg-primary/90">
-            <Plus className="w-4 h-4" />
-            Nova Atividade
-          </Button>
+          <form onSubmit={handleAddActivity} className="flex gap-2">
+            <Input 
+              placeholder="Cadastrar nova atividade do setor..." 
+              value={newActivityTitle}
+              onChange={(e) => setNewActivityTitle(e.target.value)}
+              className="flex-1"
+            />
+            <Button type="submit" disabled={isSubmitting} className="gap-2 bg-primary hover:bg-primary/90">
+              {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+              Cadastrar
+            </Button>
+          </form>
         )}
       </div>
 
@@ -130,7 +280,9 @@ export const ChecklistManager = ({ role: componentRole }: ChecklistManagerProps)
           </div>
         ) : items.length === 0 ? (
           <div className="text-center py-8 text-muted-foreground italic">
-            Nenhuma atividade cadastrada para este setor.
+            Nenhuma atividade encontrada para {selectedSectorId ? `o setor ${sectors.find(s => s.id.toString() === selectedSectorId)?.nome}` : "este setor"}.
+            <br />
+            { (role === "manager" || role === "pmo") && "Use o campo acima para cadastrar uma nova atividade."}
           </div>
         ) : (
           items.map((item) => (

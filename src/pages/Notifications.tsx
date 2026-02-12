@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -47,9 +48,11 @@ import {
   Eye,
   FileText,
   ExternalLink,
-  Download
+  Download,
+  Loader2
 } from "lucide-react";
 import { AppLayout } from "@/components/layout/AppLayout";
+import { cn } from "@/lib/utils";
 import { useRole } from "@/contexts/RoleContext";
 import { apiFetch } from "@/lib/api";
 import { supabase } from "@/lib/supabase";
@@ -69,8 +72,11 @@ interface Notification {
   fromUnidade?: string;
   errorType?: "alert" | "absence" | "aggravation";
   points?: number;
-  status?: "pending" | "accepted" | "disputed";
+  status?: "pending" | "accepted" | "disputed" | "approved" | "rejected";
   uploadUrl?: string;
+  justificativa?: string;
+  nao_no_checklist?: boolean;
+  comentario?: string;
 }
 
 export default function Notifications() {
@@ -87,10 +93,22 @@ export default function Notifications() {
   const [idToDelete, setIdToDelete] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Novos estados para reconhecimento e cadastro de checklist
+  const [isRecognizeModalOpen, setIsRecognizeModalOpen] = useState(false);
+  const [isDisputeModalOpen, setIsDisputeModalOpen] = useState(false);
+  const [isPmoJudgmentModalOpen, setIsPmoJudgmentModalOpen] = useState(false);
+  const [pmoComment, setPmoComment] = useState("");
+  const [judgmentType, setJudgmentType] = useState<"approved" | "rejected">("approved");
+  const [justification, setJustification] = useState("");
+  const [notInChecklist, setNotInChecklist] = useState("false");
+  const [isChecklistModalOpen, setIsChecklistModalOpen] = useState(false);
+  const [newChecklistTitle, setNewChecklistTitle] = useState("");
+
   const [dbNotifications, setDbNotifications] = useState<any[]>([]);
   const [sectors, setSectors] = useState<{ id: string | number; nome: string; unidade_id?: number }[]>([]);
   const [unidades, setUnidades] = useState<{ id: string | number; nome: string }[]>([]);
-  const { role, rolePermissions, userSector } = useRole();
+  const { role, rolePermissions, userSector, userSectorId, userUnitId } = useRole();
 
   const fetchNotifications = async (currentSectors: any[]) => {
     try {
@@ -254,31 +272,45 @@ export default function Notifications() {
     if (n.status === "pending" && !isTarget) isRead = true; // Pendente normal só o alvo vê
     if (n.status === "disputed") isRead = true; // Em disputa ninguém vê como pendente "de ação" até o PMO julgar
     
+    // Determinar os pontos reais
+    let calculatedPoints = 0;
+    const isProactiveImprovement = !n.id_setor_ref && n.nao_no_checklist;
+    
     // Determinar o "tipo" visual (error = vermelho, success = verde, message = cinza)
-    // Se for pendente de leitura pelo usuário atual, fica vermelho (error)
     let visualType: Notification["type"] = "error";
-    if (isRead) {
+    if (isRead || isProactiveImprovement) {
       visualType = n.status === "rejected" ? "message" : "success";
+    }
+
+    if (isProactiveImprovement) {
+      calculatedPoints = 100;
+    } else {
+      calculatedPoints = (n.notified ? -50 : -100) + (n.nao_no_checklist ? 100 : 0);
     }
 
     return {
       id: `db-${n.id}`,
       type: visualType,
-      title: isFinalized 
-        ? (n.status === "rejected" ? "Notificação Rejeitada" : "Notificação Finalizada")
-        : (isApproved ? "Julgamento: Aprovada" : isRejected ? "Julgamento: Recusada" : (n.notified ? "Reincidência" : "Notificação de Erro")),
+      title: isProactiveImprovement 
+        ? "Melhoria de Processo"
+        : isFinalized 
+          ? (n.status === "rejected" ? "Notificação Rejeitada" : "Notificação Finalizada")
+          : (isApproved ? "Julgamento: Aprovada" : isRejected ? "Julgamento: Recusada" : (n.notified ? "Reincidência" : "Notificação de Erro")),
       description: n.description,
       timestamp: n.created_at,
       read: isRead,
       priority: isRead ? "low" : "high",
-      fromSector: n.setor_ref?.nome,
-      fromUnidade: n.unidade_ref?.nome,
+      fromSector: n.setor_ref?.nome || "Sistema",
+      fromUnidade: n.unidade_ref?.nome || "Sistema",
       toSector: n.setor?.nome,
       unidade: n.unidade?.nome,
-      errorType: n.notified ? "alert" : "absence",
+      errorType: isProactiveImprovement ? undefined : (n.notified ? "alert" : "absence"),
       status: n.status || "pending",
-      points: n.notified ? -50 : -100,
-      uploadUrl: n.upload_url
+      points: calculatedPoints,
+      uploadUrl: n.upload_url,
+      justificativa: n.justificativa,
+      nao_no_checklist: n.nao_no_checklist,
+      comentario: n.comentario
     };
   });
 
@@ -304,6 +336,149 @@ export default function Notifications() {
     } catch (error: any) {
       console.error("Erro ao atualizar status:", error);
       toast.error("Erro ao atualizar status: " + error.message);
+    }
+  };
+
+  const handleConfirmRecognition = async () => {
+    if (!selectedNotification) return;
+    
+    setIsSubmitting(true);
+    try {
+      const dbId = selectedNotification.id.replace('db-', '');
+      const finalJustification = notInChecklist === "true" ? "Atividade não estava no checklist" : justification;
+      
+      // Tentamos atualizar status e opcionalmente justificativa se a coluna for adicionada no futuro
+      const updateData: any = { 
+        status: 'accepted',
+        justificativa: finalJustification,
+        nao_no_checklist: notInChecklist === "true"
+      };
+      
+      const { error } = await supabase
+        .from('notificacoes')
+        .update(updateData)
+        .eq('id', dbId);
+
+      if (error) throw error;
+
+      toast.success("Notificação reconhecida com sucesso!");
+      
+      // Se marcou que não estava no checklist, abre o modal de cadastro
+      if (notInChecklist === "true") {
+        setNewChecklistTitle(selectedNotification.description || selectedNotification.title); 
+        setIsChecklistModalOpen(true);
+      }
+
+      setIsRecognizeModalOpen(false);
+      setJustification("");
+      setNotInChecklist("false");
+      await fetchNotifications(sectors);
+    } catch (error: any) {
+      console.error("Erro ao reconhecer:", error);
+      toast.error("Erro ao processar reconhecimento.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleConfirmDispute = async () => {
+    if (!selectedNotification) return;
+    if (!justification.trim()) {
+      toast.error("Por favor, forneça uma justificativa para a contestação.");
+      return;
+    }
+    
+    setIsSubmitting(true);
+    try {
+      const dbId = selectedNotification.id.replace('db-', '');
+      
+      const { error } = await supabase
+        .from('notificacoes')
+        .update({ 
+          status: 'disputed',
+          justificativa: justification 
+        })
+        .eq('id', dbId);
+
+      if (error) throw error;
+
+      toast.success("Notificação contestada! O PMO analisará sua justificativa.");
+      setIsDisputeModalOpen(false);
+      setJustification("");
+      await fetchNotifications(sectors);
+    } catch (error: any) {
+      console.error("Erro ao contestar:", error);
+      toast.error("Erro ao processar contestação.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handlePmoJudgment = async () => {
+    if (!selectedNotification) return;
+    if (!pmoComment.trim()) {
+      toast.error("Por favor, forneça um comentário para o julgamento.");
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      const dbId = selectedNotification.id.replace('db-', '');
+      
+      const { error } = await supabase
+        .from('notificacoes')
+        .update({ 
+          status: judgmentType,
+          comentario: pmoComment 
+        })
+        .eq('id', dbId);
+
+      if (error) throw error;
+
+      toast.success(`Disputa ${judgmentType === 'approved' ? 'aprovada' : 'recusada'} com sucesso!`);
+      setIsPmoJudgmentModalOpen(false);
+      setPmoComment("");
+      await fetchNotifications(sectors);
+    } catch (error: any) {
+      console.error("Erro no julgamento PMO:", error);
+      toast.error("Erro ao processar julgamento.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleRegisterChecklist = async () => {
+    if (!newChecklistTitle.trim()) {
+      toast.error("Por favor, digite o título da atividade.");
+      return;
+    }
+
+    if (!userSectorId) {
+      toast.error("Erro: Setor do usuário não identificado.");
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      const { error } = await supabase
+        .from('checklist')
+        .insert({
+          titulo: newChecklistTitle,
+          setor_id: Number(userSectorId),
+          unidade_id: Number(userUnitId) || null,
+          pdf_url: ""
+        });
+
+      if (error) throw error;
+
+      toast.success("Atividade cadastrada no checklist com sucesso!");
+      setIsChecklistModalOpen(false);
+      setNewChecklistTitle("");
+    } catch (error: any) {
+      console.error("Erro ao cadastrar checklist:", error);
+      toast.error("Erro ao cadastrar atividade.");
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -790,17 +965,51 @@ export default function Notifications() {
                           <p className="text-sm text-muted-foreground mb-2">
                             {notification.description}
                           </p>
+
+                          {notification.justificativa && (
+                            <div className={cn(
+                              "mb-3 p-3 rounded-md border",
+                              notification.status === "accepted" ? "bg-success/5 border-success/20" : "bg-warning/5 border-warning/20"
+                            )}>
+                              <p className={cn(
+                                "text-[10px] font-bold uppercase tracking-wider mb-1 flex items-center gap-1",
+                                notification.status === "accepted" ? "text-success" : "text-warning"
+                              )}>
+                                {notification.status === "accepted" ? (
+                                  <><CheckCircle2 className="w-3 h-3" /> Justificativa do Reconhecimento</>
+                                ) : (
+                                  <><Gavel className="w-3 h-3" /> Motivo da Contestação</>
+                                )}
+                              </p>
+                              <p className="text-xs text-foreground italic">
+                                "{notification.justificativa}"
+                              </p>
+                            </div>
+                          )}
+
+                          {notification.comentario && (
+                            <div className="mb-3 p-3 rounded-md bg-primary/5 border border-primary/20">
+                              <p className="text-[10px] font-bold text-primary uppercase tracking-wider mb-1 flex items-center gap-1">
+                                <Settings className="w-3 h-3" />
+                                Parecer do PMO
+                              </p>
+                              <p className="text-xs text-foreground">
+                                {notification.comentario}
+                              </p>
+                            </div>
+                          )}
+
                           <div className="flex flex-col gap-2 mb-3">
                             <div className="flex items-center gap-2 text-[11px] font-medium text-muted-foreground">
                               <span className="uppercase tracking-wider">De:</span>
                               <span className="px-2 py-0.5 rounded bg-muted">
-                                {notification.fromUnidade || "???"} • {notification.fromSector || "???"}
+                                {notification.fromUnidade || "Setor Geral"} • {notification.fromSector || "PMO"}
                               </span>
                             </div>
                             <div className="flex items-center gap-2 text-[11px] font-medium text-primary">
                               <span className="uppercase tracking-wider">Para:</span>
                               <span className="px-2 py-0.5 rounded bg-primary/10">
-                                {notification.unidade || "???"} • {notification.toSector || "???"}
+                                {notification.unidade || "Setor Geral"} • {notification.toSector || "PMO"}
                               </span>
                             </div>
                           </div>
@@ -841,7 +1050,10 @@ export default function Notifications() {
                                 size="sm" 
                                 variant="outline" 
                                 className="text-success border-success/30 hover:bg-success/10"
-                                onClick={() => handleUpdateStatus(notification.id, "accepted")}
+                                onClick={() => {
+                                  setSelectedNotification(notification);
+                                  setIsRecognizeModalOpen(true);
+                                }}
                               >
                                 Reconhecer
                               </Button>
@@ -849,7 +1061,10 @@ export default function Notifications() {
                                 size="sm" 
                                 variant="outline" 
                                 className="text-destructive border-destructive/30 hover:bg-destructive/10"
-                                onClick={() => handleUpdateStatus(notification.id, "disputed")}
+                                onClick={() => {
+                                  setSelectedNotification(notification);
+                                  setIsDisputeModalOpen(true);
+                                }}
                               >
                                 Contestar
                               </Button>
@@ -861,7 +1076,11 @@ export default function Notifications() {
                                 size="sm" 
                                 variant="outline" 
                                 className="text-success border-success/30 hover:bg-success/10"
-                                onClick={() => handleUpdateStatus(notification.id, "approved")}
+                                onClick={() => {
+                                  setSelectedNotification(notification);
+                                  setJudgmentType("approved");
+                                  setIsPmoJudgmentModalOpen(true);
+                                }}
                               >
                                 Aprovar
                               </Button>
@@ -869,13 +1088,17 @@ export default function Notifications() {
                                 size="sm" 
                                 variant="outline" 
                                 className="text-destructive border-destructive/30 hover:bg-destructive/10"
-                                onClick={() => handleUpdateStatus(notification.id, "rejected")}
+                                onClick={() => {
+                                  setSelectedNotification(notification);
+                                  setJudgmentType("rejected");
+                                  setIsPmoJudgmentModalOpen(true);
+                                }}
                               >
                                 Recusar
                               </Button>
                             </>
                           )}
-                          {/* Botão de ciência após julgamento (Arquivar) */}
+                          {/* Botão de ciência após julgamento (Marcar como Lida) */}
                           {((notification.status === "approved" && notification.fromSector?.trim().toLowerCase() === userSector.trim().toLowerCase()) ||
                             (notification.status === "rejected" && notification.toSector?.trim().toLowerCase() === userSector.trim().toLowerCase())) && (
                               <Button 
@@ -884,7 +1107,7 @@ export default function Notifications() {
                                 className="bg-primary/10 text-primary border-primary/30 hover:bg-primary/20"
                                 onClick={() => handleUpdateStatus(notification.id, "accepted")}
                               >
-                                Arquivar Notificação
+                                Marcar como Lida
                               </Button>
                           )}
                           <Button 
@@ -1052,6 +1275,193 @@ export default function Notifications() {
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
+
+        {/* Recognize Notification Dialog */}
+        <Dialog open={isRecognizeModalOpen} onOpenChange={setIsRecognizeModalOpen}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Reconhecer Notificação</DialogTitle>
+              <DialogDescription>
+                Forneça uma justificativa para o reconhecimento desta falha.
+              </DialogDescription>
+              <div className="space-y-3">
+                <Label>Esta atividade estava prevista no seu checklist?</Label>
+                <RadioGroup 
+                  value={notInChecklist} 
+                  onValueChange={setNotInChecklist}
+                  className="flex flex-col space-y-1"
+                >
+                  <div className="flex items-center space-x-2">
+                    <RadioGroupItem value="false" id="in-checklist" />
+                    <Label htmlFor="in-checklist" className="font-normal">Sim, estava no checklist</Label>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <RadioGroupItem value="true" id="not-in-checklist" />
+                    <Label htmlFor="not-in-checklist" className="font-normal text-destructive font-medium">Não estava no checklist (Cadastrar agora)</Label>
+                  </div>
+                </RadioGroup>
+              </div>
+            </DialogHeader>
+            <div className="space-y-4 py-4">
+              <div className="space-y-2">
+                <Label htmlFor="justification">Justificativa</Label>
+                <Textarea
+                  id="justification"
+                  placeholder={notInChecklist === "true" ? "Atividade fora do checklist (Justificativa automática)" : "Descreva o motivo do reconhecimento..."}
+                  value={notInChecklist === "true" ? "" : justification}
+                  onChange={(e) => setJustification(e.target.value)}
+                  disabled={notInChecklist === "true"}
+                  className="min-h-[100px] disabled:opacity-50 disabled:bg-muted"
+                />
+              </div>
+              
+              
+            </div>
+            <div className="flex justify-end gap-3">
+              <Button variant="outline" onClick={() => setIsRecognizeModalOpen(false)}>
+                Cancelar
+              </Button>
+              <Button 
+                onClick={handleConfirmRecognition} 
+                disabled={isSubmitting || (notInChecklist === "false" && !justification.trim())}
+              >
+                {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+                Confirmar Reconhecimento
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+
+        {/* Dispute Notification Dialog */}
+        <Dialog open={isDisputeModalOpen} onOpenChange={setIsDisputeModalOpen}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <Gavel className="w-5 h-5 text-destructive" />
+                Contestar Notificação
+              </DialogTitle>
+              <DialogDescription>
+                Explique por que seu setor não reconhece esta falha. O PMO avaliará sua defesa.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 py-4">
+              <div className="space-y-2">
+                <Label htmlFor="dispute-justification">Sua Justificativa / Defesa</Label>
+                <Textarea
+                  id="dispute-justification"
+                  placeholder="Explique os detalhes do porquê esta notificação é indevida..."
+                  value={justification}
+                  onChange={(e) => setJustification(e.target.value)}
+                  className="min-h-[120px]"
+                />
+              </div>
+            </div>
+            <div className="flex justify-end gap-3">
+              <Button variant="outline" onClick={() => {
+                setIsDisputeModalOpen(false);
+                setJustification("");
+              }}>
+                Cancelar
+              </Button>
+              <Button 
+                variant="destructive"
+                onClick={handleConfirmDispute} 
+                disabled={isSubmitting || !justification.trim()}
+              >
+                {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+                Enviar Contestação
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+
+        {/* PMO Judgment Dialog */}
+        <Dialog open={isPmoJudgmentModalOpen} onOpenChange={setIsPmoJudgmentModalOpen}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <Settings className="w-5 h-5 text-primary" />
+                Julgamento de Contestação
+              </DialogTitle>
+              <DialogDescription>
+                Você está prestes a {judgmentType === "approved" ? "APROVAR" : "RECUSAR"} esta contestação.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 py-4">
+              <div className="p-3 rounded-md bg-muted/50 border border-muted">
+                <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider mb-1">
+                  Justificativa do Setor:
+                </p>
+                <p className="text-xs italic">
+                  "{selectedNotification?.justificativa || "Sem justificativa"}"
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="pmo-comment">Seu Comentário / Parecer Final</Label>
+                <Textarea
+                  id="pmo-comment"
+                  placeholder="Explique o motivo da sua decisão..."
+                  value={pmoComment}
+                  onChange={(e) => setPmoComment(e.target.value)}
+                  className="min-h-[100px]"
+                />
+              </div>
+            </div>
+            <div className="flex justify-end gap-3">
+              <Button variant="outline" onClick={() => {
+                setIsPmoJudgmentModalOpen(false);
+                setPmoComment("");
+              }}>
+                Cancelar
+              </Button>
+              <Button 
+                className={judgmentType === "approved" ? "bg-success text-success-foreground hover:bg-success/90" : ""}
+                variant={judgmentType === "approved" ? "default" : "destructive"}
+                onClick={handlePmoJudgment} 
+                disabled={isSubmitting || !pmoComment.trim()}
+              >
+                {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+                Confirmar {judgmentType === "approved" ? "Aprovação" : "Recusa"}
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+
+        {/* Register New Checklist Item Dialog */}
+        <Dialog open={isChecklistModalOpen} onOpenChange={setIsChecklistModalOpen}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Cadastrar Nova Atividade</DialogTitle>
+              <DialogDescription>
+                Como esta falha não estava no seu checklist, cadastre-a agora para evitar reincidência.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 py-4">
+              <div className="space-y-2">
+                <Label htmlFor="new-checklist-title">Título da Atividade</Label>
+                <Input
+                  id="new-checklist-title"
+                  placeholder="Ex: Conferência de validade de insumos..."
+                  value={newChecklistTitle}
+                  onChange={(e) => setNewChecklistTitle(e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="flex justify-end gap-3">
+              <Button variant="outline" onClick={() => setIsChecklistModalOpen(false)}>
+                Depois
+              </Button>
+              <Button 
+                onClick={handleRegisterChecklist} 
+                disabled={isSubmitting || !newChecklistTitle.trim()}
+              >
+                {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+                Cadastrar no Checklist
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
       </div>
     </AppLayout>
   );

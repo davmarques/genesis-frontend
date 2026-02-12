@@ -94,11 +94,13 @@ export default function Reports() {
       // 1. Scoring Breakdown
       const vitalIndices = filteredNotifications.filter((n: any) => n.id_setor_ref && !n.notified).length;
       const auditPoints = filteredNotifications.filter((n: any) => n.id_setor_ref).length;
-      const alerts = filteredNotifications.filter((n: any) => n.setor_id && n.notified).length;
-      const absences = filteredNotifications.filter((n: any) => n.setor_id && !n.notified && n.tipo_erro === 'ausência').length;
+      const alerts = filteredNotifications.filter((n: any) => n.setor_id && n.notified && !n.nao_no_checklist).length;
+      const absences = filteredNotifications.filter((n: any) => n.setor_id && !n.notified && !n.nao_no_checklist).length;
+      const improvements = filteredNotifications.filter((n: any) => n.nao_no_checklist).length;
 
       setScoringBreakdown([
         { action: "Atividades Concluídas", count: auditPoints, points: auditPoints * 50, type: "positive" },
+        { action: "Melhorias de Processo", count: improvements, points: improvements * 100, type: "positive" },
         { action: "Notificações de Alerta", count: alerts, points: alerts * -50, type: "negative" },
         { action: "Notificações de Ausência", count: absences, points: absences * -100, type: "negative" },
       ]);
@@ -106,9 +108,17 @@ export default function Reports() {
       // 2. Sector Data
       const sData = targetSectors.map((s: any) => {
         const sectorPoints = notifications.reduce((acc: number, n: any) => {
-          if (n.id_setor_ref === s.id) return acc + 50;
-          if (n.setor_id === s.id) return acc + (n.notified ? -50 : -100);
-          return acc;
+          let score = acc;
+          if (n.id_setor_ref === s.id) score += 50;
+          if (n.setor_id === s.id) {
+            if (!n.id_setor_ref && n.nao_no_checklist) {
+              score += 100;
+            } else {
+              score += (n.notified ? -50 : -100);
+              if (n.nao_no_checklist) score += 100;
+            }
+          }
+          return score;
         }, 0);
         return { sector: s.nome, points: sectorPoints };
       }).sort((a: any, b: any) => b.points - a.points).slice(0, 5);
@@ -117,10 +127,27 @@ export default function Reports() {
 
       // 3. Stats
       const totalPoints = filteredNotifications.reduce((acc: number, n: any) => {
-        if (mySectorObj && n.id_setor_ref === mySectorObj.id) return acc + 50;
-        if (mySectorObj && n.setor_id === mySectorObj.id) return acc + (n.notified ? -50 : -100);
-        if (role === 'pmo') return acc + (n.id_setor_ref ? 50 : 0);
-        return acc;
+        let score = acc;
+        const isReporter = mySectorObj && n.id_setor_ref === mySectorObj.id;
+        const isTarget = mySectorObj && n.setor_id === mySectorObj.id;
+
+        if (isReporter) score += 50;
+        if (isTarget) {
+          if (!n.id_setor_ref && n.nao_no_checklist) {
+            score += 100;
+          } else {
+            score += (n.notified ? -50 : -100);
+            if (n.nao_no_checklist) score += 100;
+          }
+        }
+        
+        if (role === 'pmo' && !isTarget) {
+           // PMO total score logic (reports + voluntary additions globally)
+           if (n.id_setor_ref) score += 50;
+           if (!n.id_setor_ref && n.nao_no_checklist) score += 100;
+        }
+
+        return score;
       }, 0);
 
       setStats({

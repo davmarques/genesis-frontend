@@ -29,53 +29,51 @@ import {
 import {
   Plus,
   Search,
-  Filter,
-  CheckCircle2,
-  Circle,
-  Clock,
-  AlertCircle,
-  MoreVertical,
-  Download,
-  Upload,
-  Eye,
-  Edit,
   Trash2,
   Building2,
   Handshake,
   FileText,
-  Loader2
+  Loader2,
+  ChevronRight,
+  ArrowRight
 } from "lucide-react";
 import { AppLayout } from "@/components/layout/AppLayout";
+import { cn } from "@/lib/utils";
 import { useRole } from "@/contexts/RoleContext";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/lib/supabase";
-import * as pdfjsLib from "pdfjs-dist";
-
-// Configurar o worker do PDF.js usando CDN para garantir compatibilidade e evitar erro 500 no Vite
-pdfjsLib.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
 
 export default function Checklists() {
   const [searchQuery, setSearchQuery] = useState("");
-  const [activeTab, setActiveTab] = useState("all");
-  const { role, rolePermissions, userSector } = useRole();
-  const [isImporting, setIsImporting] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
-  const [pdfData, setPdfData] = useState<string[]>([]);
-  const [showImportDialog, setShowImportDialog] = useState(false);
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [checklistTitle, setChecklistTitle] = useState("");
+  const [activeTab, setActiveTab] = useState("atividades");
+  const { role, rolePermissions, userSector, userSectorId, userUnitId } = useRole();
   const [dbChecklists, setDbChecklists] = useState<any[]>([]);
+  const [dbConvenios, setDbConvenios] = useState<any[]>([]);
   const [unidades, setUnidades] = useState<any[]>([]);
   const [setores, setSetores] = useState<any[]>([]);
-  const [selectedUnidade, setSelectedUnidade] = useState<string>("");
-  const [selectedSetor, setSelectedSetor] = useState<string>("");
-  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Novos estados para cadastro rápido
+  const [quickActivityTitle, setQuickActivityTitle] = useState("");
+  const [selectedSectorMain, setSelectedSectorMain] = useState<string>("");
+  const [isRegistering, setIsRegistering] = useState(false);
+
+  // Estados para Atividades do Convênio
+  const [isAddingSubItem, setIsAddingSubItem] = useState(false);
+  const [subItemTitle, setSubItemTitle] = useState("");
+  const [selectedConvenioId, setSelectedConvenioId] = useState<number | null>(null);
+
   const { toast } = useToast();
+
+  useEffect(() => {
+    if (userSectorId) {
+      setSelectedSectorMain(userSectorId.toString());
+    }
+  }, [userSectorId]);
 
   const getStorageUrl = (path: string) => {
     if (!path) return "#";
     if (path.startsWith('http')) return path;
-    
+
     try {
       const { data } = supabase.storage.from('checklist_upload').getPublicUrl(path);
       return data?.publicUrl || "#";
@@ -87,44 +85,178 @@ export default function Checklists() {
 
   const fetchChecklists = async () => {
     try {
-      let query = supabase
+      console.log("Fetching for sector:", selectedSectorMain);
+
+      // 1. Busca Atividades Principais (Tabela checklist)
+      let checklistsQuery = supabase
         .from('checklist')
-        .select(`
-          *,
-          unidade:unidade_id(nome),
-          setor:setor_id(nome)
-        `)
+        .select('*') // Simplificado para garantir o carregamento
         .order('created_at', { ascending: false });
 
-      if (role !== 'pmo') {
-        const userStr = localStorage.getItem("genesis_user");
-        const user = userStr ? JSON.parse(userStr) : null;
-        if (user?.setor_id) {
-          query = query.eq('setor_id', user.setor_id);
-        } else if (user?.unidade_id) {
-          query = query.eq('unidade_id', user.unidade_id);
+      // 2. Busca Convênios (Tabela convenio)
+      let conveniosQuery = supabase
+        .from('convenio')
+        .select('*, atividades:checklist_convenio!convenio_id(*)') // Especificando qual FK usar
+        .order('created_at', { ascending: false });
+
+      if (selectedSectorMain) {
+        const sid = Number(selectedSectorMain);
+        checklistsQuery = checklistsQuery.eq('setor_id', sid);
+        conveniosQuery = conveniosQuery.eq('setor_id', sid);
+      } else if (role !== 'pmo') {
+        if (userSectorId) {
+          const sid = Number(userSectorId);
+          checklistsQuery = checklistsQuery.eq('setor_id', sid);
+          conveniosQuery = conveniosQuery.eq('setor_id', sid);
+        } else if (userUnitId) {
+          const uid = Number(userUnitId);
+          checklistsQuery = checklistsQuery.eq('unidade_id', uid);
+          conveniosQuery = conveniosQuery.eq('unidade_id', uid);
         }
       }
 
-      const { data, error } = await query;
-      if (error) throw error;
-      setDbChecklists(data || []);
+      const [resChecklists, resConvenios] = await Promise.all([
+        checklistsQuery,
+        conveniosQuery
+      ]);
+
+      if (resChecklists.error) {
+        console.error("Checklists error:", resChecklists.error);
+        throw resChecklists.error;
+      }
+      if (resConvenios.error) {
+        console.error("Convenios error:", resConvenios.error);
+        throw resConvenios.error;
+      }
+
+      console.log("Checklists found:", resChecklists.data?.length);
+      console.log("Convenios found:", resConvenios.data?.length);
+
+      setDbChecklists(resChecklists.data || []);
+      setDbConvenios(resConvenios.data || []);
     } catch (error: any) {
-      console.error("Erro ao buscar checklists:", error);
+      console.error("Erro ao buscar dados:", error);
+      toast({ variant: "destructive", title: "Erro de Conexão", description: "Não foi possível carregar os dados do banco." });
+    }
+  };
+
+  const handleQuickRegister = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!quickActivityTitle.trim() || !selectedSectorMain) {
+      toast({
+        variant: "destructive",
+        title: "Campos obrigatórios",
+        description: "Digite o título e selecione um setor.",
+      });
+      return;
+    }
+
+    setIsRegistering(true);
+    try {
+      if (activeTab === "atividades") {
+        const { error } = await supabase
+          .from('checklist')
+          .insert({
+            titulo: quickActivityTitle,
+            setor_id: Number(selectedSectorMain),
+            unidade_id: Number(userUnitId) || null,
+            pdf_url: "" // Requisito da tabela
+          });
+        if (error) throw error;
+
+        // Registrar ganho de pontos por melhoria proativa
+        await supabase.from('notificacoes').insert({
+          setor_id: Number(selectedSectorMain),
+          unidade_id: Number(userUnitId) || null,
+          description: `Melhoria proativa: Inclusão de "${quickActivityTitle}" no checklist.`,
+          status: 'accepted',
+          nao_no_checklist: true,
+          created_at: new Date().toISOString()
+          // id_setor_ref fica null (Sistema)
+        });
+      } else {
+        const { error } = await supabase
+          .from('convenio')
+          .insert({
+            nome: quickActivityTitle,
+            setor_id: Number(selectedSectorMain),
+            unidade_id: Number(userUnitId) || null
+          });
+        if (error) throw error;
+
+        // Registrar ganho de pontos por melhoria proativa (Convênio)
+        await supabase.from('notificacoes').insert({
+          setor_id: Number(selectedSectorMain),
+          unidade_id: Number(userUnitId) || null,
+          description: `Melhoria proativa: Novo convênio "${quickActivityTitle}" cadastrado.`,
+          status: 'accepted',
+          nao_no_checklist: true,
+          created_at: new Date().toISOString()
+        });
+      }
+
+      toast({ title: "Sucesso!", description: activeTab === "convenios" ? "Convênio cadastrado (+100 pts)." : "Atividade cadastrada (+100 pts)." });
+      setQuickActivityTitle("");
+      fetchChecklists();
+    } catch (error: any) {
+      toast({ variant: "destructive", title: "Erro", description: error.message });
+    } finally {
+      setIsRegistering(false);
+    }
+  };
+
+  const handleAddSubItem = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!subItemTitle.trim() || !selectedConvenioId) return;
+
+    setIsAddingSubItem(true);
+    try {
+      const { error } = await supabase
+        .from('checklist_convenio')
+        .insert({
+          titulo: subItemTitle,
+          convenio_id: selectedConvenioId,
+          setor_id: Number(selectedSectorMain),
+          unidade_id: Number(userUnitId) || null
+        });
+
+      if (error) throw error;
+
+      toast({ title: "Atividade adicionada", description: "Atividade vinculada ao convênio." });
+      setSubItemTitle("");
+      fetchChecklists();
+    } catch (error: any) {
+      toast({ variant: "destructive", title: "Erro", description: error.message });
+    } finally {
+      setIsAddingSubItem(false);
     }
   };
 
   const fetchMetadata = async () => {
     try {
       const { data: units } = await supabase.from('unidade').select('id, nome');
-      const { data: sectors } = await supabase.from('setor').select('id, nome');
+
+      let sectorsQuery = supabase.from('setor').select('id, nome, unidade_id');
+
+      // Apenas PMO vê todos os setores. Outros vêem apenas o seu designado.
+      if (!rolePermissions.canViewAllSectors) {
+        if (userSectorId) {
+          sectorsQuery = sectorsQuery.eq('id', userSectorId);
+        } else if (userUnitId) {
+          sectorsQuery = sectorsQuery.eq('unidade_id', userUnitId);
+        }
+      }
+
+      const { data: sectors } = await sectorsQuery.order('nome');
+
       setUnidades(units || []);
       setSetores(sectors || []);
-      
+
       const userStr = localStorage.getItem("genesis_user");
       const user = userStr ? JSON.parse(userStr) : null;
-      if (user?.unidade_id) setSelectedUnidade(user.unidade_id.toString());
-      if (user?.setor_id) setSelectedSetor(user.setor_id.toString());
+      if (user?.setor_id) {
+        if (!selectedSectorMain) setSelectedSectorMain(user.setor_id.toString());
+      }
     } catch (error) {
       console.error("Erro ao buscar metadados:", error);
     }
@@ -133,225 +265,307 @@ export default function Checklists() {
   useEffect(() => {
     fetchChecklists();
     fetchMetadata();
-  }, [role, userSector]);
+  }, [role, userSector, selectedSectorMain]);
 
-  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file || file.type !== "application/pdf") return;
-
-    setSelectedFile(file);
-    setChecklistTitle(file.name.replace(".pdf", ""));
-    setIsImporting(true);
-    setShowImportDialog(true);
-    setPdfData([]);
-
+  const handleDeleteItem = async (id: number, table: 'checklist' | 'convenio' | 'checklist_convenio') => {
+    if (!confirm(`Deseja excluir este item de ${table}?`)) return;
     try {
-      const arrayBuffer = await file.arrayBuffer();
-      const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) });
-      const pdf = await loadingTask.promise;
-      const numPages = pdf.numPages;
-      const extractedText: string[] = [];
-
-      for (let i = 1; i <= numPages; i++) {
-        const page = await pdf.getPage(i);
-        const textContent = await page.getTextContent();
-        const pageText = textContent.items
-          .map((item: any) => item.str || "")
-          .join(" ");
-        extractedText.push(pageText || `[Página ${i}: Nenhum texto legível]`);
-      }
-      setPdfData(extractedText);
-    } catch (error: any) {
-      setPdfData([`Erro ao ler PDF: ${error.message}`]);
-    } finally {
-      setIsImporting(false);
-    }
-  };
-
-  const handleConfirmImport = async () => {
-    if (!selectedFile || !checklistTitle || !selectedUnidade || !selectedSetor) {
-      toast({
-        variant: "destructive",
-        title: "Campos obrigatórios",
-        description: "Preencha todos os campos e selecione o arquivo.",
-      });
-      return;
-    }
-
-    setIsSaving(true);
-    try {
-      const fileName = `${Date.now()}_${selectedFile.name.replace(/\s+/g, '_')}`;
-      const { error: uploadError } = await supabase.storage
-        .from('checklist_upload')
-        .upload(fileName, selectedFile);
-      if (uploadError) throw uploadError;
-
-      const { error: dbError } = await supabase
-        .from('checklist')
-        .insert({
-          unidade_id: Number(selectedUnidade),
-          setor_id: Number(selectedSetor),
-          titulo: checklistTitle,
-          pdf_url: fileName
-        });
-      if (dbError) throw dbError;
-
-      toast({ title: "Sucesso!", description: "Checklist importado." });
-      setShowImportDialog(false);
-      fetchChecklists();
-    } catch (error: any) {
-      toast({ variant: "destructive", title: "Erro", description: error.message });
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  const handleDeleteChecklist = async (id: number, pdfPath: string) => {
-    if (!confirm("Deseja excluir este checklist?")) return;
-    try {
-      const { error } = await supabase.from('checklist').delete().eq('id', id);
+      const { error } = await supabase.from(table).delete().eq('id', id);
       if (error) throw error;
-      if (pdfPath && !pdfPath.startsWith('http')) {
-        await supabase.storage.from('checklist_upload').remove([pdfPath]);
-      }
-      toast({ title: "Sucesso", description: "Checklist excluído." });
+      toast({ title: "Excluído", description: "Item removido com sucesso." });
       fetchChecklists();
     } catch (error: any) {
       toast({ variant: "destructive", title: "Erro", description: error.message });
     }
   };
-
-  const handleDownload = async (path: string, fileName: string) => {
-    try {
-      const url = getStorageUrl(path);
-      const response = await fetch(url);
-      const blob = await response.blob();
-      const blobUrl = window.URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = blobUrl;
-      link.download = fileName.endsWith('.pdf') ? fileName : `${fileName}.pdf`;
-      link.click();
-      window.URL.revokeObjectURL(blobUrl);
-    } catch (error) {
-      toast({ variant: "destructive", title: "Erro", description: "Falha no download." });
-    }
-  };
-
-  const triggerFileInput = () => fileInputRef.current?.click();
 
   const getSubtitle = () => {
     switch (role) {
-      case "pmo": return "Gerenciar checklists de todos os setores";
-      case "manager": return `Gerencie o checklist do setor ${userSector}`;
+      case "pmo": return "Gerenciar atividades e convênios de todos os setores";
+      case "manager": return `Gerencie o setor ${userSector}`;
       default: return "Visualize suas atividades";
     }
   };
 
-  const filteredDbChecklists = dbChecklists.filter(item => {
+  const filteredItems = dbChecklists.filter(item => {
     const searchLower = searchQuery.toLowerCase();
-    return (
-      item.titulo.toLowerCase().includes(searchLower) ||
-      (item.setor?.nome || "").toLowerCase().includes(searchLower)
-    );
+    return item.titulo.toLowerCase().includes(searchLower);
+  });
+
+  const filteredConvenios = dbConvenios.filter(item => {
+    const searchLower = searchQuery.toLowerCase();
+    return item.nome.toLowerCase().includes(searchLower);
   });
 
   return (
     <AppLayout title="Checklists" subtitle={getSubtitle()}>
-      <div className="p-6 space-y-6">
-        <div className="flex flex-wrap gap-4 justify-between items-center">
-          <div className="relative flex-1 max-w-sm">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-            <Input
-              placeholder="Buscar por título ou setor..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-10"
-            />
+      <div className="p-6">
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
+          {/* Coluna de Setores */}
+          <div className="space-y-6">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-bold flex items-center gap-2">
+                <Building2 className="w-5 h-5 text-primary" />
+                {rolePermissions.canViewAllSectors ? "Setores" : "Meu Setor"}
+              </h3>
+              {rolePermissions.canViewAllSectors && (
+                <Badge variant="secondary" className="font-bold">
+                  {setores.length}
+                </Badge>
+              )}
+            </div>
+
+            <div className="flex flex-col gap-2">
+              {setores.length === 0 ? (
+                <div className="text-center py-8 text-sm text-muted-foreground border-2 border-dashed rounded-lg">
+                  {rolePermissions.canViewAllSectors ? "Carregando setores..." : "Setor não encontrado"}
+                </div>
+              ) : (
+                setores.map((s) => (
+                  <button
+                    key={s.id}
+                    onClick={() => setSelectedSectorMain(s.id.toString())}
+                    className={cn(
+                      "group w-full text-left p-4 rounded-xl border-2 transition-all flex items-center justify-between",
+                      selectedSectorMain === s.id.toString()
+                        ? "border-primary bg-primary/5 text-primary shadow-sm"
+                        : "border-transparent bg-card hover:bg-muted/50 text-muted-foreground"
+                    )}
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className={cn(
+                        "w-2 h-2 rounded-full",
+                        selectedSectorMain === s.id.toString() ? "bg-primary" : "bg-muted-foreground/30"
+                      )} />
+                      <span className="font-semibold text-sm truncate max-w-[150px]">{s.nome}</span>
+                    </div>
+                    {rolePermissions.canViewAllSectors && (
+                      <ChevronRight className={cn(
+                        "w-4 h-4 transition-all",
+                        selectedSectorMain === s.id.toString()
+                          ? "translate-x-0 opacity-100"
+                          : "translate-x-[-10px] opacity-0 group-hover:translate-x-0 group-hover:opacity-100"
+                      )} />
+                    )}
+                  </button>
+                ))
+              )}
+            </div>
           </div>
 
-          {rolePermissions.canImportChecklists && (
-            <>
-              <input type="file" ref={fileInputRef} onChange={handleFileUpload} accept="application/pdf" className="hidden" />
-              <Button variant="outline" className="gap-2" onClick={triggerFileInput} disabled={isImporting}>
-                {isImporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
-                Importar PDF
-              </Button>
-            </>
-          )}
-        </div>
-
-        <Dialog open={showImportDialog} onOpenChange={setShowImportDialog}>
-          <DialogContent className="max-w-2xl">
-            <DialogHeader>
-              <DialogTitle>Importar Checklist</DialogTitle>
-              <DialogDescription>Confirme as informações do documento.</DialogDescription>
-            </DialogHeader>
-            <div className="space-y-4 pt-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label>Unidade</Label>
-                  <Select value={selectedUnidade} onValueChange={setSelectedUnidade}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {unidades.map(u => <SelectItem key={u.id} value={u.id.toString()}>{u.nome}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
+          {/* Coluna de Atividades/Checklists */}
+          <div className="lg:col-span-3 space-y-6">
+            {!selectedSectorMain ? (
+              <Card className="h-[400px] flex flex-col items-center justify-center border-dashed border-2">
+                <div className="w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center mb-4">
+                  <ArrowRight className="w-8 h-8 text-primary" />
                 </div>
-                <div className="space-y-2">
-                  <Label>Setor</Label>
-                  <Select value={selectedSetor} onValueChange={setSelectedSetor}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {setores.map(s => <SelectItem key={s.id} value={s.id.toString()}>{s.nome}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-              <div className="space-y-2">
-                <Label>Título</Label>
-                <Input value={checklistTitle} onChange={e => setChecklistTitle(e.target.value)} />
-              </div>
-              <div className="flex justify-end gap-2 pt-4">
-                <Button variant="outline" onClick={() => setShowImportDialog(false)}>Cancelar</Button>
-                <Button className="bg-green-600 hover:bg-green-700" onClick={handleConfirmImport} disabled={isSaving}>
-                  {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : "Confirmar"}
-                </Button>
-              </div>
-            </div>
-          </DialogContent>
-        </Dialog>
-
-        <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList>
-            <TabsTrigger value="all">Todos ({filteredDbChecklists.length})</TabsTrigger>
-          </TabsList>
-          <TabsContent value="all" className="pt-4 space-y-4">
-            {filteredDbChecklists.length > 0 ? (
-              filteredDbChecklists.map((item) => (
-                <Card key={item.id} className="p-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
-                  <div className="flex items-center gap-3">
-                    <Badge variant="outline" className="bg-primary/5 text-primary">{item.setor?.nome || "Setor"}</Badge>
-                    <span className="font-semibold">{item.titulo}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Button size="sm" variant="outline" asChild>
-                      <a href={getStorageUrl(item.pdf_url)} target="_blank" rel="noreferrer"><Eye className="w-4 h-4 mr-1" /> Ver</a>
-                    </Button>
-                    <Button size="sm" variant="outline" onClick={() => handleDownload(item.pdf_url, item.titulo)}><Download className="w-4 h-4 mr-1" /> Exportar</Button>
-                    <Button size="sm" variant="ghost" onClick={() => handleDeleteChecklist(item.id, item.pdf_url)} className="text-destructive"><Trash2 className="w-4 h-4" /></Button>
-                  </div>
-                </Card>
-              ))
+                <h3 className="text-xl font-bold mb-2">Selecione um Setor</h3>
+                <p className="text-muted-foreground text-center max-w-xs">
+                  Escolha um setor à esquerda para visualizar e gerenciar suas atividades e checklists.
+                </p>
+              </Card>
             ) : (
-              <div className="text-center py-12 text-muted-foreground border-2 border-dashed rounded-lg">
-                Nenhum checklist disponível.
+              <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                {/* Header do Setor Selecionado e Cadastro Rápido */}
+                <Card className="p-6 bg-gradient-to-br from-card to-muted/30">
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-6">
+                    <div>
+                      <h2 className="text-2xl font-bold text-foreground flex items-center gap-2">
+                        {setores.find(s => s.id.toString() === selectedSectorMain)?.nome || "Setor"}
+                      </h2>
+                      <p className="text-muted-foreground">Gerenciamento de atividades e convênios</p>
+                    </div>
+
+                    <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full md:w-auto">
+                      <TabsList className="grid w-full grid-cols-2">
+                        <TabsTrigger value="atividades" className="gap-2">
+                          <FileText className="w-4 h-4" />
+                          Atividades
+                        </TabsTrigger>
+                        <TabsTrigger value="convenios" className="gap-2">
+                          <Handshake className="w-4 h-4" />
+                          Convênios
+                        </TabsTrigger>
+                      </TabsList>
+                    </Tabs>
+                  </div>
+
+                  {(role === "manager" || role === "pmo") && (
+                    <form onSubmit={handleQuickRegister} className="flex flex-col sm:flex-row items-end gap-3 p-4 bg-background/50 rounded-xl border border-border">
+                      <div className="flex-1 w-full space-y-2">
+                        <Label className="text-xs font-bold uppercase text-muted-foreground">
+                          {activeTab === "atividades" ? "Nova Atividade" : "Novo Convênio"}
+                        </Label>
+                        <Input
+                          placeholder={activeTab === "atividades" ? "Ex: Verificação de carrinhos de emergência..." : "Ex: Convênio Porto Seguro..."}
+                          value={quickActivityTitle}
+                          onChange={(e) => setQuickActivityTitle(e.target.value)}
+                          className="bg-background"
+                        />
+                      </div>
+                      <Button type="submit" disabled={isRegistering} className="w-full sm:w-auto bg-primary hover:bg-primary/90 gap-2 h-10 px-6">
+                        {isRegistering ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                        Cadastrar
+                      </Button>
+                    </form>
+                  )}
+                </Card>
+
+                {/* Filtro de Busca e Lista */}
+                <div className="space-y-4">
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                    <Input
+                      placeholder={`Filtrar ${activeTab === "atividades" ? "atividades" : "convênios"} por título...`}
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="pl-10 h-11"
+                    />
+                  </div>
+
+                  <div className="space-y-3">
+                    {activeTab === "atividades" ? (
+                      filteredItems.length > 0 ? (
+                        filteredItems.map((item) => (
+                          <Card key={item.id} className="p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 border-2 hover:border-primary/30 transition-all group">
+                            <div className="flex items-center gap-4">
+                              <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center text-primary">
+                                <FileText className="w-5 h-5" />
+                              </div>
+                              <div className="flex flex-col">
+                                <span className="font-bold text-foreground group-hover:text-primary transition-colors">{item.titulo}</span>
+                                <Badge variant="outline" className="text-[10px] w-fit mt-1 bg-muted/50">Atividade Geral</Badge>
+                              </div>
+                            </div>
+                            {(role === "manager" || role === "pmo") && (
+                              <Button size="sm" variant="ghost" onClick={() => handleDeleteItem(item.id, 'checklist')} className="h-9 w-9 p-0 text-destructive hover:bg-destructive/10 shrink-0">
+                                <Trash2 className="w-4 h-4" />
+                              </Button>
+                            )}
+                          </Card>
+                        ))
+                      ) : (
+                        <NoItemsFound type="atividades" />
+                      )
+                    ) : (
+                      filteredConvenios.length > 0 ? (
+                        <Accordion type="multiple" className="space-y-3">
+                          {filteredConvenios.map((item) => (
+                            <AccordionItem key={item.id} value={item.id.toString()} className="border-2 rounded-xl overflow-hidden px-0">
+                              <Card className="border-0 shadow-none relative">
+                                <AccordionTrigger className="flex w-full items-center justify-between p-4 bg-muted/20 hover:no-underline hover:bg-muted/30 transition-colors border-none group">
+                                  <div className="flex items-center gap-4 text-left">
+                                    <div className="w-10 h-10 rounded-full bg-secondary/10 flex items-center justify-center text-secondary shrink-0">
+                                      <Handshake className="w-5 h-5" />
+                                    </div>
+                                    <div>
+                                      <h4 className="font-bold text-foreground line-clamp-1">{item.nome}</h4>
+                                      <Badge variant="outline" className="text-[10px] bg-background">Convênio</Badge>
+                                    </div>
+                                  </div>
+                                </AccordionTrigger>
+
+                                <div className="absolute right-12 top-1/2 -translate-y-1/2 z-10">
+                                  {/* {(role === "manager" || role === "pmo") && (
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      onClick={(e) => {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        handleDeleteItem(item.id, 'convenio');
+                                      }}
+                                      className="h-9 w-9 p-0 text-destructive hover:bg-destructive/10 rounded-full"
+                                    >
+                                      <Trash2 className="w-4 h-4" />
+                                    </Button>
+                                  )} */}
+                                </div>
+
+                                <AccordionContent className="p-4 bg-background">
+                                  <div className="space-y-3">
+                                    <div className="flex items-center justify-between">
+                                      <h5 className="text-[10px] font-bold uppercase text-muted-foreground tracking-wider">Itens do Checklist</h5>
+                                      <Badge variant="secondary" className="text-[10px]">{item.atividades?.length || 0} itens</Badge>
+                                    </div>
+
+                                    {item.atividades && item.atividades.length > 0 ? (
+                                      <div className="grid gap-2">
+                                        {item.atividades.map((sub: any) => (
+                                          <div key={sub.id} className="flex items-center justify-between p-3 rounded-lg bg-muted/30 border border-transparent hover:border-border transition-all group/sub">
+                                            <div className="flex items-center gap-3">
+                                              <div className="w-1.5 h-1.5 rounded-full bg-secondary/40" />
+                                              <span className="text-sm font-medium text-foreground/80">{sub.titulo}</span>
+                                            </div>
+                                            {(role === "manager" || role === "pmo") && (
+                                              <Button
+                                                size="sm"
+                                                variant="ghost"
+                                                onClick={() => handleDeleteItem(sub.id, 'checklist_convenio')}
+                                                className="h-7 w-7 p-0 text-destructive hover:bg-destructive/10 transition-all shrink-0"
+                                              >
+                                                <Trash2 className="w-3.5 h-3.5" />
+                                              </Button>
+                                            )}
+                                          </div>
+                                        ))}
+                                      </div>
+                                    ) : (
+                                      <div className="text-center py-6 px-4 rounded-lg border border-dashed bg-muted/10">
+                                        <p className="text-xs text-muted-foreground italic">Nenhuma atividade cadastrada para este convênio.</p>
+                                      </div>
+                                    )}
+
+                                    {(role === "manager" || role === "pmo") && (
+                                      <form
+                                        onSubmit={(e) => {
+                                          e.preventDefault();
+                                          setSelectedConvenioId(item.id);
+                                          handleAddSubItem(e);
+                                        }}
+                                        className="pt-4 flex gap-2"
+                                      >
+                                        <Input
+                                          placeholder="Adicionar nova verificação..."
+                                          className="h-9 text-sm bg-muted/20"
+                                          value={selectedConvenioId === item.id ? subItemTitle : ""}
+                                          onChange={(e) => {
+                                            setSelectedConvenioId(item.id);
+                                            setSubItemTitle(e.target.value);
+                                          }}
+                                        />
+                                        <Button type="submit" size="sm" className="h-9 px-4 gap-2 shrink-0">
+                                          <Plus className="w-4 h-4" /> Adicionar
+                                        </Button>
+                                      </form>
+                                    )}
+                                  </div>
+                                </AccordionContent>
+                              </Card>
+                            </AccordionItem>
+                          ))}
+                        </Accordion>
+                      ) : (
+                        <NoItemsFound type="convenios" />
+                      )
+                    )}
+                  </div>
+                </div>
               </div>
             )}
-          </TabsContent>
-        </Tabs>
+          </div>
+        </div>
       </div>
     </AppLayout>
   );
 }
 
-function ChecklistCard({ checklist, role }: { checklist: any; role: string }) { return null; }
+function NoItemsFound({ type }: { type: string }) {
+  return (
+    <div className="text-center py-16 text-muted-foreground border-2 border-dashed rounded-2xl bg-muted/20">
+      {type === "atividades" ? <FileText className="w-12 h-12 mx-auto mb-4 opacity-20" /> : <Handshake className="w-12 h-12 mx-auto mb-4 opacity-20" />}
+      <p className="font-medium">Nenhum item encontrado.</p>
+    </div>
+  );
+}

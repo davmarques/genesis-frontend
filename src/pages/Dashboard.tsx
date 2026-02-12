@@ -32,11 +32,10 @@ import { ActivityFeed } from "@/components/dashboard/ActivityFeed";
 import { TeamManager } from "@/components/dashboard/TeamManager";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { useRole } from "@/contexts/RoleContext";
-import { apiFetch } from "@/lib/api";
 import { supabase } from "@/lib/supabase";
 
 const Dashboard = () => {
-  const { role, userSector, rolePermissions } = useRole();
+  const { role, userSector, userSectorId } = useRole();
   const [stats, setStats] = useState({
     totalSectors: 0,
     totalMembers: 0,
@@ -57,38 +56,107 @@ const Dashboard = () => {
     const fetchDashboardData = async () => {
       setIsLoading(true);
       try {
-        const [allSectors, allMembers, allNotifications] = await Promise.all([
-          apiFetch("/admin/sectors").catch(() => []),
-          apiFetch("/admin/members").catch(() => []),
-          supabase.from('notificacoes').select(`
-            *,
-            setor:setor_id(nome),
-            unidade:unidade_id(nome),
-            setor_ref:id_setor_ref(nome),
-            unidade_ref:id_unidade_ref(nome)
-          `)
+        // Otimização: Se não for PMO, filtramos na query do Supabase para reduzir carga de dados
+        let notificationsQuery = supabase.from('notificacoes').select(`
+          *,
+          setor:setor_id(nome),
+          unidade:unidade_id(nome),
+          setor_ref:id_setor_ref(nome),
+          unidade_ref:id_unidade_ref(nome)
+        `);
+
+        // Query direta de setores (substituindo apiFetch)
+        let sectorsQuery = supabase.from('setor').select(`
+          id,
+          nome,
+          unidade_id,
+          coordenador_id,
+          unidade:unidade(nome),
+          coordenador:users!coordenador_id(id, name, email)
+        `).order('nome');
+
+        // Query direta de membros (substituindo apiFetch)
+        let membersQuery = supabase.from('users').select(`
+          id,
+          name,
+          email,
+          role,
+          unidade_id,
+          unidade:unidade!users_unidade_id_fkey(nome),
+          setor_id,
+          setor:setor!users_setor_id_fkey(nome),
+          coordinated_sectors:setor!coordenador_id(nome),
+          created_at
+        `).order('name');
+
+        if (role !== "pmo" && userSectorId) {
+          // Filtrar notificações que envolvam o setor do usuário (como origem ou destino)
+          notificationsQuery = notificationsQuery.or(`setor_id.eq.${userSectorId},id_setor_ref.eq.${userSectorId}`);
+          // Filtrar setores e membros na fonte para melhor performance
+          sectorsQuery = sectorsQuery.eq('id', userSectorId);
+          membersQuery = membersQuery.eq('setor_id', userSectorId);
+        }
+
+        const [sectorsResult, membersResult, notificationsResult] = await Promise.all([
+          sectorsQuery,
+          membersQuery,
+          notificationsQuery
         ]);
 
-        let sectorsList = (Array.isArray(allSectors) ? allSectors : []) as any[];
-        let membersList = (Array.isArray(allMembers) ? allMembers : []) as any[];
-        let notificationsList = (allNotifications?.data || []) as any[];
+        // Formatar setores (replicando lógica do backend /admin/sectors)
+        let sectorsList = (sectorsResult.data || []).map((s: any) => ({
+          id: s.id,
+          nome: s.nome,
+          unidade_id: s.unidade_id,
+          coordenador_id: s.coordenador_id,
+          unidade_nome: s.unidade?.nome || 'Nenhuma',
+          manager: s.coordenador?.name || 'Não definido',
+          manager_email: s.coordenador?.email || '',
+          manager_id: s.coordenador?.id || null,
+          membersCount: 0,
+          completionRate: 0,
+          score: 0
+        }));
 
-        // Buscar objeto do setor do usuário logado
-        const currentUserSectorObj = sectorsList.find(s => 
-          s.nome?.trim().toLowerCase() === userSector?.trim().toLowerCase()
-        );
+        // Formatar membros (replicando lógica do backend /admin/members)
+        let membersList = (membersResult.data || []).map((u: any) => {
+          const dbRole = String(u.role || '').toLowerCase();
+          let roleLabel = dbRole;
+          if (dbRole.includes('coord') || dbRole.includes('manager') || dbRole.includes('gestor')) roleLabel = 'manager';
+          else if (dbRole.includes('colab') || dbRole.includes('labor')) roleLabel = 'collaborator';
+          else if (dbRole.includes('pmo')) roleLabel = 'pmo';
 
-        // Se não for PMO, filtrar tudo pelo SETOR do usuário (Pedido do usuário: view baseada no setor)
+          const coordinated = u.coordinated_sectors;
+          const firstCoordinated = Array.isArray(coordinated) ? coordinated[0] : coordinated;
+
+          return {
+            ...u,
+            role: roleLabel,
+            sector: u.setor?.nome || 'Nenhum',
+            unidade_nome: u.unidade?.nome || 'Nenhuma',
+            isSectorManager: !!firstCoordinated,
+            managedSectorName: firstCoordinated?.nome,
+            phone: '(11) 99999-9999',
+            status: 'active',
+            tasksCompleted: 0,
+            totalTasks: 0,
+            points: 0,
+            level: 1,
+            joinDate: u.created_at ? new Date(u.created_at).toISOString().split('T')[0] : new Date().toISOString().split('T')[0]
+          };
+        });
+
+        let notificationsList = (notificationsResult.data || []) as any[];
+
+        // Buscar objeto do setor do usuário logado usando ID (mais performático que nome)
+        const currentUserSectorObj = userSectorId 
+          ? sectorsList.find(s => String(s.id) === String(userSectorId))
+          : sectorsList.find(s => s.nome?.trim().toLowerCase() === userSector?.trim().toLowerCase());
+
+        // Se não for PMO, garantimos a filtragem final em memória para segurança
         if (role !== "pmo" && currentUserSectorObj) {
-          // Managers agora vêem apenas seu próprio setor para gestão
           sectorsList = sectorsList.filter(s => s.id === currentUserSectorObj.id);
-          
-          // Filtrar membros que pertencem a este setor específico
-          membersList = membersList.filter(m => 
-            m.sector && m.sector.trim().toLowerCase() === userSector?.trim().toLowerCase()
-          );
-
-          // Filtrar notificações deste setor (origem ou destino)
+          membersList = membersList.filter(m => m.setor_id === currentUserSectorObj.id);
           notificationsList = notificationsList.filter(n => 
             n.setor_id === currentUserSectorObj.id || n.id_setor_ref === currentUserSectorObj.id
           );
@@ -101,7 +169,19 @@ const Dashboard = () => {
             const status = n.status?.toLowerCase();
             return !status || ['disputed', 'contestada', 'pending', 'pendente'].includes(status);
           }).length,
-          totalPoints: notificationsList.reduce((acc, n) => acc + (n.id_setor_ref ? 50 : 0) + (n.pontos || 0), 0)
+          totalPoints: notificationsList.reduce((acc, n) => {
+            const isReport = !!n.id_setor_ref;
+            const basePoints = isReport ? 50 : 0;
+            
+            // Melhoria Voluntária: Sem reportador e com flag de checklist
+            if (!isReport && n.nao_no_checklist) {
+              return acc + 100;
+            }
+
+            const penalty = n.notified ? -50 : -100;
+            const reward = n.nao_no_checklist ? 100 : 0;
+            return acc + basePoints + penalty + reward;
+          }, 0)
         };
 
         const pendingList = notificationsList
@@ -118,19 +198,32 @@ const Dashboard = () => {
             date: n.created_at,
             status: n.status || 'pending'
           }));
-        setDisputes(pendingList);
 
         // Dados específicos do setor do coordenador/colaborador
-        const mySectorMembers = membersList.filter(m => m.sector === userSector);
+        const mySectorMembersCount = membersList.length;
         
         // Calcular pontos do setor
         const sectorPoints = notificationsList.reduce((acc, n) => {
           let score = acc;
-          if (currentUserSectorObj && n.id_setor_ref === currentUserSectorObj.id) {
+          const isTarget = currentUserSectorObj && n.setor_id === currentUserSectorObj.id;
+          const isReporter = currentUserSectorObj && n.id_setor_ref === currentUserSectorObj.id;
+
+          // Pontos por auditoria (quem reportou)
+          if (isReporter) {
             score += 50;
           }
-          if (currentUserSectorObj && n.setor_id === currentUserSectorObj.id) {
-            score += (n.pontos || 0);
+
+          // Pontos por erro/correção/melhoria (setor alvo)
+          if (isTarget) {
+            // Melhoria Proativa (Inclusão voluntária no checklist)
+            if (!n.id_setor_ref && n.nao_no_checklist) {
+              score += 100;
+            } else {
+              // Notificação de erro
+              const penalty = n.notified ? -50 : -100;
+              const reward = n.nao_no_checklist ? 100 : 0;
+              score += penalty + reward;
+            }
           }
           return score;
         }, 0);
@@ -140,29 +233,19 @@ const Dashboard = () => {
           const status = n.status?.toLowerCase();
           return !status || ['pending', 'pendente'].includes(status);
         }).length;
-        const totalSectorActivities = notificationsList.filter(n => currentUserSectorObj && n.id_setor_ref === currentUserSectorObj.id).length;
 
-        setStats(prev => ({
-          ...prev,
+        // Atualizar estados uma única vez para evitar re-renders excessivos
+        setDisputes(pendingList);
+        setStats({
           ...pmoStats,
-          sectorMembers: mySectorMembers.length,
+          sectorRank: "1º",
+          sectorMembers: mySectorMembersCount,
           sectorPoints,
           userPoints: 0,
           userNotices: sectorNotifications.length,
           pendingChecklists: pendingNotices,
           completionRate: "0%"
-        }));
-
-        setStats(prev => ({
-          ...prev,
-          ...pmoStats,
-          sectorMembers: mySectorMembers.length,
-          sectorPoints,
-          userPoints: 0, // Iniciando em 0
-          userNotices: sectorNotifications.length,
-          pendingChecklists: pendingNotices,
-          completionRate: "0%" 
-        }));
+        });
 
       } catch (error) {
         console.error("Erro ao carregar dados do dashboard:", error);
@@ -172,7 +255,7 @@ const Dashboard = () => {
     };
 
     fetchDashboardData();
-  }, [userSector]);
+  }, [userSectorId, userSector, role]);
 
   const getSubtitle = () => {
     switch (role) {
