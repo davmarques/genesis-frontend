@@ -3,6 +3,12 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import {
@@ -49,7 +55,9 @@ import {
   FileText,
   ExternalLink,
   Download,
-  Loader2
+  Loader2,
+  ArrowLeftRight,
+  XCircle,
 } from "lucide-react";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { cn } from "@/lib/utils";
@@ -100,6 +108,7 @@ export default function Notifications() {
   const [isPmoJudgmentModalOpen, setIsPmoJudgmentModalOpen] = useState(false);
   const [pmoComment, setPmoComment] = useState("");
   const [judgmentType, setJudgmentType] = useState<"approved" | "rejected">("approved");
+  const [transferSectorId, setTransferSectorId] = useState("");
   const [justification, setJustification] = useState("");
   const [notInChecklist, setNotInChecklist] = useState("false");
   const [isChecklistModalOpen, setIsChecklistModalOpen] = useState(false);
@@ -272,14 +281,21 @@ export default function Notifications() {
     if (n.status === "pending" && !isTarget) isRead = true; // Pendente normal só o alvo vê
     if (n.status === "disputed") isRead = true; // Em disputa ninguém vê como pendente "de ação" até o PMO julgar
     
+    // Se a notificação foi transferida e o usuário é o novo destino, marcar como não lida
+    if (n.status === "pending" && isTarget) {
+      isRead = false;
+    }
+    
     // Determinar os pontos reais
     let calculatedPoints = 0;
     const isProactiveImprovement = !n.id_setor_ref && n.nao_no_checklist;
     
     // Determinar o "tipo" visual (error = vermelho, success = verde, message = cinza)
     let visualType: Notification["type"] = "error";
-    if (isRead || isProactiveImprovement) {
-      visualType = n.status === "rejected" ? "message" : "success";
+    if (n.status === "accepted" || isProactiveImprovement) {
+      visualType = "success";
+    } else if (n.status === "rejected" || n.status === "disputed") {
+      visualType = "message";
     }
 
     if (isProactiveImprovement) {
@@ -300,8 +316,8 @@ export default function Notifications() {
       timestamp: n.created_at,
       read: isRead,
       priority: isRead ? "low" : "high",
-      fromSector: n.setor_ref?.nome || "Sistema",
-      fromUnidade: n.unidade_ref?.nome || "Sistema",
+      fromSector: n.setor_ref?.nome || "PMO",
+      fromUnidade: n.unidade_ref?.nome || "PMO",
       toSector: n.setor?.nome,
       unidade: n.unidade?.nome,
       errorType: isProactiveImprovement ? undefined : (n.notified ? "alert" : "absence"),
@@ -425,19 +441,35 @@ export default function Notifications() {
     try {
       const dbId = selectedNotification.id.replace('db-', '');
       
+      const updateData: any = { 
+        status: judgmentType,
+        comentario: pmoComment 
+      };
+
+      // Se a contestação for aprovada (judgmentType === 'approved'), o PMO concorda que o setor atual não é o responsável.
+      // Nesse caso, se houver um setor de transferência selecionado, trocamos o setor e voltamos para 'pending'.
+      if (judgmentType === 'approved' && transferSectorId && transferSectorId !== "none") {
+        updateData.setor_id = parseInt(transferSectorId);
+        // Ao transferir, a notificação volta a ser pendente para o novo setor
+        updateData.status = 'pending'; 
+      }
+
       const { error } = await supabase
         .from('notificacoes')
-        .update({ 
-          status: judgmentType,
-          comentario: pmoComment 
-        })
+        .update(updateData)
         .eq('id', dbId);
 
       if (error) throw error;
 
-      toast.success(`Disputa ${judgmentType === 'approved' ? 'aprovada' : 'recusada'} com sucesso!`);
+      if (judgmentType === 'approved' && transferSectorId && transferSectorId !== "none") {
+        toast.success(`Notificação transferida para o novo setor com sucesso!`);
+      } else {
+        toast.success(`Disputa ${judgmentType === 'approved' ? 'aprovada' : 'recusada'} com sucesso!`);
+      }
+      
       setIsPmoJudgmentModalOpen(false);
       setPmoComment("");
+      setTransferSectorId("");
       await fetchNotifications(sectors);
     } catch (error: any) {
       console.error("Erro no julgamento PMO:", error);
@@ -629,7 +661,7 @@ export default function Notifications() {
       case "task":
         return <Calendar className="w-5 h-5 text-primary" />;
       case "message":
-        return <MessageSquare className="w-5 h-5 text-secondary-foreground" />;
+        return <MessageSquare className="w-5 h-5 text-secondary" />;
       case "dispute":
         return <Gavel className="w-5 h-5 text-warning" />;
       default:
@@ -644,7 +676,7 @@ export default function Notifications() {
       success: "bg-success/10 text-success border-success/30",
       ranking: "bg-gold/10 text-gold border-gold/30",
       task: "bg-primary/10 text-primary border-primary/30",
-      message: "bg-secondary/10 text-secondary-foreground border-secondary/30",
+      message: "bg-secondary/10 text-secondary border-secondary/30",
       dispute: "bg-warning/10 text-warning border-warning/30"
     };
     const labels = {
@@ -701,9 +733,9 @@ export default function Notifications() {
     }
   };
 
-  const unreadCount = allNotifications.filter(n => !n.read).length;
-  // disputeCount para o PMO = disputas aguardando julgamento
-  // para o Gestor = tudo que exige ação/ciência (Não lidas)
+  const unreadCount = allNotifications.filter(n => n.status === "pending").length;
+  // Para o PMO, disputeCount foca em status "disputed"
+  // Para os demais, disputeCount foca em status "pending"
   const disputeCount = role === "pmo" 
     ? allNotifications.filter(n => n.status === "disputed").length
     : unreadCount;
@@ -731,7 +763,7 @@ export default function Notifications() {
                 <AlertCircle className="w-5 h-5 text-destructive" />
               </div>
               <div>
-                <p className="text-sm text-muted-foreground">Não Lidas</p>
+                <p className="text-sm text-muted-foreground">Em aberto</p>
                 <p className="text-2xl font-bold text-foreground">{unreadCount}</p>
               </div>
             </div>
@@ -770,7 +802,7 @@ export default function Notifications() {
           <div className="flex flex-row pb-2 justify-between">
             <TabsList>
               <TabsTrigger value="all">Todas ({allNotifications.length})</TabsTrigger>
-              <TabsTrigger value="unread">Não Lidas ({unreadCount})</TabsTrigger>
+              <TabsTrigger value="unread">Em aberto ({unreadCount})</TabsTrigger>
               {(role === "pmo" || role === "manager") && (
                 <TabsTrigger value="disputes">
                   {role === "pmo" ? `Disputas (${disputeCount})` : `Pendentes (${disputeCount})`}
@@ -785,7 +817,6 @@ export default function Notifications() {
               >
                 <AlertCircle className="w-4 h-4" />
                 Reportar Erro
-                <Badge className="ml-1 bg-success text-success-foreground">+50 pts</Badge>
               </Button>
             )}
           </div>
@@ -841,7 +872,7 @@ export default function Notifications() {
               </div>
 
               <div className="mb-6">
-                <label className="text-sm font-medium mb-3 block">Já foi notificado anteriormente?</label>
+                <label className="text-sm font-medium mb-3 block">Já notificou este setor pelo mesmo motivo?</label>
                 <RadioGroup
                   value={errorType}
                   onValueChange={setErrorType}
@@ -925,218 +956,286 @@ export default function Notifications() {
 
           <TabsContent value={activeTab} className="mt-6">
             <div className="space-y-3">
-              {allNotifications
-                .filter(n => {
-                  if (activeTab === "unread") return !n.read;
-                  if (activeTab === "disputes") {
-                    if (role === "pmo") return n.status === "disputed";
-                    return !n.read;
-                  }
-                  return true;
-                })
-                .map((notification) => (
-                  <Card
-                    key={notification.id}
-                    className={`p-5 hover:border-primary/50 transition-all ${!notification.read ? 'border-primary/30 bg-primary/5' : ''
-                      }`}
-                  >
-                  <div className="flex items-start gap-4">
-                    <div className={`p-3 rounded-lg ${notification.type === "error" ? "bg-destructive/10" :
-                      notification.type === "success" ? "bg-success/10" :
-                        notification.type === "ranking" ? "bg-gold/10" :
-                          notification.type === "task" ? "bg-primary/10" :
-                            notification.type === "dispute" ? "bg-warning/10" :
-                              "bg-secondary/10"
-                      }`}>
-                      {getNotificationIcon(notification.type)}
-                    </div>
+              {role === "pmo" ? (
+                <Accordion type="multiple" className="space-y-4">
+                  {sectors
+                    .filter(sector => 
+                      allNotifications.some(n => 
+                        n.toSector === sector.nome && (
+                          activeTab === "all" || 
+                          (activeTab === "unread" && n.status === "pending") ||
+                          (activeTab === "disputes" && n.status === "disputed")
+                        )
+                      )
+                    )
+                    .map(sector => {
+                      const sectorNotifications = allNotifications.filter(n => 
+                        n.toSector === sector.nome && (
+                          activeTab === "all" || 
+                          (activeTab === "unread" && n.status === "pending") ||
+                          (activeTab === "disputes" && n.status === "disputed")
+                        )
+                      );
 
-                    <div className="flex-1 space-y-2">
-                      <div className="flex items-start justify-between gap-4">
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2 mb-1">
-                            <h3 className="font-semibold text-foreground">
-                              {notification.title}
-                            </h3>
-                            {!notification.read && (
-                              <div className="w-2 h-2 rounded-full bg-primary" />
-                            )}
-                          </div>
-                          <p className="text-sm text-muted-foreground mb-2">
-                            {notification.description}
-                          </p>
-
-                          {notification.justificativa && (
-                            <div className={cn(
-                              "mb-3 p-3 rounded-md border",
-                              notification.status === "accepted" ? "bg-success/5 border-success/20" : "bg-warning/5 border-warning/20"
-                            )}>
-                              <p className={cn(
-                                "text-[10px] font-bold uppercase tracking-wider mb-1 flex items-center gap-1",
-                                notification.status === "accepted" ? "text-success" : "text-warning"
-                              )}>
-                                {notification.status === "accepted" ? (
-                                  <><CheckCircle2 className="w-3 h-3" /> Justificativa do Reconhecimento</>
-                                ) : (
-                                  <><Gavel className="w-3 h-3" /> Motivo da Contestação</>
-                                )}
-                              </p>
-                              <p className="text-xs text-foreground italic">
-                                "{notification.justificativa}"
-                              </p>
-                            </div>
-                          )}
-
-                          {notification.comentario && (
-                            <div className="mb-3 p-3 rounded-md bg-primary/5 border border-primary/20">
-                              <p className="text-[10px] font-bold text-primary uppercase tracking-wider mb-1 flex items-center gap-1">
-                                <Settings className="w-3 h-3" />
-                                Parecer do PMO
-                              </p>
-                              <p className="text-xs text-foreground">
-                                {notification.comentario}
-                              </p>
-                            </div>
-                          )}
-
-                          <div className="flex flex-col gap-2 mb-3">
-                            <div className="flex items-center gap-2 text-[11px] font-medium text-muted-foreground">
-                              <span className="uppercase tracking-wider">De:</span>
-                              <span className="px-2 py-0.5 rounded bg-muted">
-                                {notification.fromUnidade || "Setor Geral"} • {notification.fromSector || "PMO"}
-                              </span>
-                            </div>
-                            <div className="flex items-center gap-2 text-[11px] font-medium text-primary">
-                              <span className="uppercase tracking-wider">Para:</span>
-                              <span className="px-2 py-0.5 rounded bg-primary/10">
-                                {notification.unidade || "Setor Geral"} • {notification.toSector || "PMO"}
-                              </span>
-                            </div>
-                          </div>
-                          <div className="flex flex-wrap items-center gap-3">
-                            {getNotificationBadge(notification.type)}
-                            {notification.errorType && getErrorTypeBadge(notification.errorType)}
-                            {notification.points && (
-                              <Badge variant="outline" className={
-                                notification.points > 0
-                                  ? "bg-success/10 text-success border-success/30"
-                                  : "bg-destructive/10 text-destructive border-destructive/30"
-                              }>
-                                {notification.points > 0 ? `+${notification.points}` : notification.points} pts
+                      return (
+                        <AccordionItem key={sector.id} value={String(sector.id)} className="border rounded-lg px-4 bg-card">
+                          <AccordionTrigger className="hover:no-underline py-4">
+                            <div className="flex items-center gap-3">
+                              <span className="font-bold text-lg">{sector.nome}</span>
+                              <Badge variant="secondary" className="bg-primary/10 text-primary border-primary/20">
+                                {sectorNotifications.length} {sectorNotifications.length === 1 ? 'Notificação' : 'Notificações'}
                               </Badge>
-                            )}
-                            {notification.status && (
-                              <Badge variant="outline" className={
-                                notification.status === "pending" ? "bg-warning/10 text-warning border-warning/30" :
-                                  notification.status === "disputed" ? "bg-destructive/10 text-destructive border-destructive/30" :
-                                    notification.status === "rejected" ? "bg-muted text-muted-foreground border-muted" :
-                                      "bg-success/10 text-success border-success/30"
-                              }>
-                                {notification.status === "pending" ? "Pendente" :
-                                  notification.status === "disputed" ? "Em Disputa" :
-                                    notification.status === "rejected" ? "Rejeitada" : "Finalizada"}
-                              </Badge>
-                            )}
-                            <span className="text-xs text-muted-foreground">
-                              {formatTimestamp(notification.timestamp)}
-                            </span>
-                          </div>
+                            </div>
+                          </AccordionTrigger>
+                          <AccordionContent className="pb-4 space-y-3">
+                            {sectorNotifications.map((notification) => (
+                              <Card
+                                key={notification.id}
+                                className={`p-5 hover:border-primary/50 transition-all ${!notification.read ? 'border-primary/30 bg-primary/5' : ''
+                                  }`}
+                              >
+                                <div className="flex items-start gap-4">
+                                  <div className={`p-3 rounded-lg ${notification.type === "error" ? "bg-destructive/10" :
+                                    notification.type === "success" ? "bg-success/10" :
+                                      notification.type === "ranking" ? "bg-gold/10" :
+                                        notification.type === "task" ? "bg-primary/10" :
+                                          notification.type === "dispute" ? "bg-warning/10" :
+                                            "bg-secondary/10"
+                                    }`}>
+                                    {getNotificationIcon(notification.type)}
+                                  </div>
+
+                                  <div className="flex-1 space-y-2">
+                                    <div className="flex items-start justify-between gap-4">
+                                      <div className="flex-1">
+                                        <div className="flex items-center gap-2 mb-1">
+                                          <h3 className="font-semibold text-foreground">
+                                            {notification.title}
+                                          </h3>
+                                          {!notification.read && (
+                                            <div className="w-2 h-2 rounded-full bg-primary" />
+                                          )}
+                                        </div>
+                                        <p className="text-sm text-muted-foreground mb-2">
+                                          {notification.description}
+                                        </p>
+                                        <div className="flex items-center gap-3">
+                                          {notification.points !== undefined && (
+                                            <Badge className={notification.points > 0 ? "bg-success/10 text-success border-success/30" : "bg-destructive/10 text-destructive border-destructive/30"}>
+                                              {notification.points > 0 ? `+${notification.points}` : notification.points} pts
+                                            </Badge>
+                                          )}
+                                          {notification.status && (
+                                            <Badge variant="outline" className={
+                                              notification.status === "pending" ? "bg-warning/10 text-warning border-warning/30" :
+                                                notification.status === "disputed" ? "bg-destructive/10 text-destructive border-destructive/30" :
+                                                  notification.status === "rejected" ? "bg-muted text-muted-foreground border-muted" :
+                                                    "bg-success/10 text-success border-success/30"
+                                            }>
+                                              {notification.status === "pending" ? "Pendente" :
+                                                notification.status === "disputed" ? "Em Disputa" :
+                                                  notification.status === "rejected" ? "Rejeitada" : "Finalizada"}
+                                            </Badge>
+                                          )}
+                                          <span className="text-xs text-muted-foreground">
+                                            {formatTimestamp(notification.timestamp)}
+                                          </span>
+                                        </div>
+                                      </div>
+                                      <div className="flex items-center gap-2">
+                                        {notification.status === "disputed" && role === "pmo" && (
+                                          <div className="flex gap-2">
+                                            <Button 
+                                              size="sm" 
+                                              className="bg-success hover:bg-success/90 text-success-foreground gap-1"
+                                              onClick={() => {
+                                                setSelectedNotification(notification);
+                                                setJudgmentType("approved");
+                                                setIsPmoJudgmentModalOpen(true);
+                                              }}
+                                            >
+                                              <CheckCircle2 className="w-4 h-4" />
+                                              Aprovar Contestação
+                                            </Button>
+                                            <Button 
+                                              size="sm" 
+                                              variant="destructive" 
+                                              className="gap-1"
+                                              onClick={() => {
+                                                setSelectedNotification(notification);
+                                                setJudgmentType("rejected");
+                                                setIsPmoJudgmentModalOpen(true);
+                                              }}
+                                            >
+                                              <XCircle className="w-4 h-4" />
+                                              Manter Falha
+                                            </Button>
+                                          </div>
+                                        )}
+                                        <Button 
+                                          variant="ghost" 
+                                          size="icon"
+                                          onClick={() => {
+                                            setSelectedNotification(notification);
+                                            setIsDetailsOpen(true);
+                                          }}
+                                        >
+                                          <Eye className="w-4 h-4" />
+                                        </Button>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+                              </Card>
+                            ))}
+                          </AccordionContent>
+                        </AccordionItem>
+                      );
+                    })}
+                </Accordion>
+              ) : (
+                allNotifications
+                  .filter(n => {
+                    if (activeTab === "unread") {
+                      return n.status === "pending";
+                    }
+                    if (activeTab === "disputes") {
+                      return n.status === "pending";
+                    }
+                    return true;
+                  })
+                  .map((notification) => (
+                    <Card
+                      key={notification.id}
+                      className={`p-5 hover:border-primary/50 transition-all ${!notification.read ? 'border-primary/30 bg-primary/5' : ''
+                        }`}
+                    >
+                      <div className="flex items-start gap-4">
+                        <div className={`p-3 rounded-lg ${notification.type === "error" ? "bg-destructive/10" :
+                          notification.type === "success" ? "bg-success/10" :
+                            notification.type === "ranking" ? "bg-gold/10" :
+                              notification.type === "task" ? "bg-primary/10" :
+                                notification.type === "dispute" ? "bg-warning/10" :
+                                  "bg-secondary/10"
+                          }`}>
+                          {getNotificationIcon(notification.type)}
                         </div>
-                        <div className="flex items-center gap-2">
-                          {notification.status === "pending" && 
-                           notification.toSector?.trim().toLowerCase() === userSector.trim().toLowerCase() && (
-                            <>
+
+                        <div className="flex-1 space-y-2">
+                          <div className="flex items-start justify-between gap-4">
+                            <div className="flex-1">
+                              <div className="flex items-center gap-2 mb-1">
+                                <h3 className="font-semibold text-foreground">
+                                  {notification.title}
+                                </h3>
+                                {!notification.read && (
+                                  <div className="w-2 h-2 rounded-full bg-primary" />
+                                )}
+                              </div>
+                              
+                              {role !== "pmo" && (
+                                <div className="flex items-center gap-1.5 mb-2">
+                                  <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/70">Origem:</span>
+                                  <Badge variant="outline" className="text-[10px] py-0 px-1.5 bg-muted/30 border-muted-foreground/20 font-medium">
+                                    {notification.fromSector || "PMO"}
+                                  </Badge>
+                                </div>
+                              )}
+
+                              <p className="text-sm text-muted-foreground mb-2">
+                                {notification.description}
+                              </p>
+                              <div className="flex items-center gap-3">
+                                {notification.points !== undefined && (
+                                  <Badge className={notification.points > 0 ? "bg-success/10 text-success border-success/30" : "bg-destructive/10 text-destructive border-destructive/30"}>
+                                    {notification.points > 0 ? `+${notification.points}` : notification.points} pts
+                                  </Badge>
+                                )}
+                                {notification.status && (
+                                  <Badge variant="outline" className={
+                                    notification.status === "pending" ? "bg-warning/10 text-warning border-warning/30" :
+                                      notification.status === "disputed" ? "bg-destructive/10 text-destructive border-destructive/30" :
+                                        notification.status === "rejected" ? "bg-muted text-muted-foreground border-muted" :
+                                          "bg-success/10 text-success border-success/30"
+                                  }>
+                                    {notification.status === "pending" ? "Pendente" :
+                                      notification.status === "disputed" ? "Em Disputa" :
+                                        notification.status === "rejected" ? "Rejeitada" : "Finalizada"}
+                                  </Badge>
+                                )}
+                                <span className="text-xs text-muted-foreground">
+                                  {formatTimestamp(notification.timestamp)}
+                                </span>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              {notification.status === "pending" && 
+                               notification.toSector?.trim().toLowerCase() === userSector.trim().toLowerCase() && (
+                                <>
+                                  <Button 
+                                    size="sm" 
+                                    variant="outline" 
+                                    className="text-success border-success/30 hover:bg-success/10"
+                                    onClick={() => {
+                                      setSelectedNotification(notification);
+                                      setIsRecognizeModalOpen(true);
+                                    }}
+                                  >
+                                    Reconhecer
+                                  </Button>
+                                  <Button 
+                                    size="sm" 
+                                    variant="outline" 
+                                    className="text-destructive border-destructive/30 hover:bg-destructive/10"
+                                    onClick={() => {
+                                      setSelectedNotification(notification);
+                                      setIsDisputeModalOpen(true);
+                                    }}
+                                  >
+                                    Contestar
+                                  </Button>
+                                </>
+                              )}
+                              {/* Botão de ciência após julgamento (Marcar como Lida) */}
+                              {((notification.status === "approved" && notification.fromSector?.trim().toLowerCase() === userSector.trim().toLowerCase()) ||
+                                (notification.status === "rejected" && notification.toSector?.trim().toLowerCase() === userSector.trim().toLowerCase())) && (
+                                  <Button 
+                                    size="sm" 
+                                    variant="outline" 
+                                    className="bg-primary/10 text-primary border-primary/30 hover:bg-primary/20"
+                                    onClick={() => handleUpdateStatus(notification.id, "accepted")}
+                                  >
+                                    Marcar como Lida
+                                  </Button>
+                              )}
                               <Button 
-                                size="sm" 
-                                variant="outline" 
-                                className="text-success border-success/30 hover:bg-success/10"
+                                variant="ghost" 
+                                size="icon"
                                 onClick={() => {
                                   setSelectedNotification(notification);
-                                  setIsRecognizeModalOpen(true);
+                                  setIsDetailsOpen(true);
                                 }}
                               >
-                                Reconhecer
+                                <Eye className="w-4 h-4" />
                               </Button>
                               <Button 
-                                size="sm" 
-                                variant="outline" 
-                                className="text-destructive border-destructive/30 hover:bg-destructive/10"
+                                variant="ghost" 
+                                size="icon"
                                 onClick={() => {
-                                  setSelectedNotification(notification);
-                                  setIsDisputeModalOpen(true);
+                                  setIdToDelete(notification.id);
+                                  setIsDeleteDialogOpen(true);
                                 }}
+                                className="text-muted-foreground hover:text-destructive transition-colors"
                               >
-                                Contestar
+                                <Trash2 className="w-4 h-4" />
                               </Button>
-                            </>
-                          )}
-                          {notification.status === "disputed" && role === "pmo" && (
-                            <>
-                              <Button 
-                                size="sm" 
-                                variant="outline" 
-                                className="text-success border-success/30 hover:bg-success/10"
-                                onClick={() => {
-                                  setSelectedNotification(notification);
-                                  setJudgmentType("approved");
-                                  setIsPmoJudgmentModalOpen(true);
-                                }}
-                              >
-                                Aprovar
-                              </Button>
-                              <Button 
-                                size="sm" 
-                                variant="outline" 
-                                className="text-destructive border-destructive/30 hover:bg-destructive/10"
-                                onClick={() => {
-                                  setSelectedNotification(notification);
-                                  setJudgmentType("rejected");
-                                  setIsPmoJudgmentModalOpen(true);
-                                }}
-                              >
-                                Recusar
-                              </Button>
-                            </>
-                          )}
-                          {/* Botão de ciência após julgamento (Marcar como Lida) */}
-                          {((notification.status === "approved" && notification.fromSector?.trim().toLowerCase() === userSector.trim().toLowerCase()) ||
-                            (notification.status === "rejected" && notification.toSector?.trim().toLowerCase() === userSector.trim().toLowerCase())) && (
-                              <Button 
-                                size="sm" 
-                                variant="outline" 
-                                className="bg-primary/10 text-primary border-primary/30 hover:bg-primary/20"
-                                onClick={() => handleUpdateStatus(notification.id, "accepted")}
-                              >
-                                Marcar como Lida
-                              </Button>
-                          )}
-                          <Button 
-                            variant="ghost" 
-                            size="icon"
-                            onClick={() => {
-                              setSelectedNotification(notification);
-                              setIsDetailsOpen(true);
-                            }}
-                          >
-                            <Eye className="w-4 h-4" />
-                          </Button>
-                          <Button 
-                            variant="ghost" 
-                            size="icon"
-                            onClick={() => {
-                              setIdToDelete(notification.id);
-                              setIsDeleteDialogOpen(true);
-                            }}
-                            className="text-muted-foreground hover:text-destructive transition-colors"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </Button>
+                            </div>
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  </div>
-                </Card>
-              ))}
+                    </Card>
+                  ))
+              )}
             </div>
           </TabsContent>
         </Tabs>
@@ -1407,6 +1506,33 @@ export default function Notifications() {
                   className="min-h-[100px]"
                 />
               </div>
+
+              {judgmentType === "approved" && (
+                <div className="space-y-2 p-3 border border-warning/30 bg-warning/5 rounded-md">
+                  <Label className="text-warning flex items-center gap-2">
+                    <ArrowLeftRight className="w-4 h-4" />
+                    Deseja transferir para outro setor? (Opcional)
+                  </Label>
+                  <p className="text-[11px] text-muted-foreground mb-2">
+                    Caso o setor que contestou esteja correto e a falha seja de outro setor, selecione abaixo.
+                  </p>
+                  <Select value={transferSectorId} onValueChange={setTransferSectorId}>
+                    <SelectTrigger className="w-full bg-background">
+                      <SelectValue placeholder="Manter setor atual" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">Manter setor atual</SelectItem>
+                      {sectors
+                        .filter(s => s.id.toString() !== selectedNotification?.toSector)
+                        .map((sector) => (
+                          <SelectItem key={sector.id} value={String(sector.id)}>
+                            {sector.nome}
+                          </SelectItem>
+                        ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
             </div>
             <div className="flex justify-end gap-3">
               <Button variant="outline" onClick={() => {
