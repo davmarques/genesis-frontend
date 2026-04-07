@@ -420,8 +420,8 @@ export default function Reports() {
     <AppLayout title="Relatórios" subtitle={getSubtitle()}>
       <div className="p-6 space-y-6">
         {/* Header Actions */}
-        <div className="flex flex-wrap gap-4 justify-between items-center">
-          <div className="flex gap-2">
+        <div className="flex flex-wrap gap-4 justify-end items-center">
+          {/* <div className="flex gap-2">
             <Button variant="outline" className="gap-2">
               <Calendar className="w-4 h-4" />
               Período
@@ -430,7 +430,7 @@ export default function Reports() {
               <Filter className="w-4 h-4" />
               Filtros
             </Button>
-          </div>
+          </div> */}
           <Button 
             onClick={exportToPDF}
             className="gap-2 bg-primary hover:bg-primary/90 text-primary-foreground"
