@@ -76,9 +76,9 @@ export const ActivityFeed = () => {
       const formatted = (data || []).map((n: any) => ({
         id: n.id,
         type: n.notified ? "alert" : "absence",
-        fromSector: n.setor_ref?.nome || "Sistema",
+        fromSector: n.setor_ref?.nome || "PMO",
         fromUnidade: n.unidade_ref?.nome || "Geral",
-        toSector: n.setor?.nome || "Auditado",
+        toSector: n.setor?.nome || "Comercial",
         toUnidade: n.unidade?.nome || "Unidade",
         description: n.description,
         points: n.notified ? -50 : -100, // Pontos negativos para o receptor

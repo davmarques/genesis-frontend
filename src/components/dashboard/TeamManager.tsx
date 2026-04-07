@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Plus, Mail, MoreVertical, Loader2 } from "lucide-react";
 import { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import { useRole } from "@/contexts/RoleContext";
 import { apiFetch } from "@/lib/api";
 
@@ -23,6 +24,7 @@ export const TeamManager = () => {
   const [members, setMembers] = useState<TeamMember[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const { role, userSectorId } = useRole();
+  const navigate = useNavigate();
 
   useEffect(() => {
     const fetchMembers = async () => {
@@ -72,7 +74,8 @@ export const TeamManager = () => {
             {isLoading ? "Carregando..." : `${members.filter(m => m.status === "active").length} membros ativos`}
           </p>
         </div>
-        <Button className="gap-2 bg-primary hover:bg-primary/90">
+          
+        <Button onClick={() => navigate("/teams")} className="gap-2 bg-primary hover:bg-primary/90">
           <Plus className="w-4 h-4" />
           Adicionar Membro
         </Button>
@@ -108,48 +111,16 @@ export const TeamManager = () => {
                       <div className="flex-1">
                         <div className="flex items-center gap-2 mb-1">
                           <h4 className="font-semibold text-foreground truncate">{member.name}</h4>
-                          <Badge 
-                            variant="outline" 
-                            className={member.status === "active" ? "bg-success/10 text-success border-success/30" : "bg-muted text-muted-foreground"}
-                          >
-                            {member.status === "active" ? "Ativo" : "Inativo"}
-                          </Badge>
+                          
                         </div>
                         <div className="flex items-center gap-2 text-sm text-muted-foreground">
                           <Mail className="w-3 h-3" />
                           <span className="truncate">{member.email}</span>
                         </div>
                       </div>
-                      <Button variant="ghost" size="icon" className="flex-shrink-0">
+                      {/* <Button variant="ghost" size="icon" className="flex-shrink-0">
                         <MoreVertical className="w-4 h-4" />
-                      </Button>
-                    </div>
-
-                    <div className="grid grid-cols-3 gap-4 mt-4">
-                      <div>
-                        <p className="text-xs text-muted-foreground mb-1">Tarefas</p>
-                        <p className="text-sm font-semibold text-foreground">
-                          {member.tasksCompleted}/{member.totalTasks}
-                        </p>
-                      </div>
-                      <div>
-                        <p className="text-xs text-muted-foreground mb-1">Taxa de Conclusão</p>
-                        <div className="flex items-center gap-2">
-                          <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
-                            <div 
-                              className="h-full bg-gradient-to-r from-primary to-secondary transition-all"
-                              style={{ width: `${completionRate}%` }}
-                            />
-                          </div>
-                          <span className="text-sm font-semibold text-foreground">{completionRate}%</span>
-                        </div>
-                      </div>
-                      <div>
-                        <p className="text-xs text-muted-foreground mb-1">Pontos</p>
-                        <Badge className="bg-primary/10 text-primary border-primary/30 font-bold">
-                          {member.points}
-                        </Badge>
-                      </div>
+                      </Button> */}
                     </div>
                   </div>
                 </div>

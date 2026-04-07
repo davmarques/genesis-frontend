@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -119,6 +120,76 @@ export default function Notifications() {
   const [unidades, setUnidades] = useState<{ id: string | number; nome: string }[]>([]);
   const { role, rolePermissions, userSector, userSectorId, userUnitId } = useRole();
 
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // Transformar notificações do banco para o formato da interface UI
+  const mappedNotifications: Notification[] = dbNotifications.map(n => {
+    const isFinalized = n.status === "accepted";
+    const isApproved = n.status === "approved";
+    const isRejected = n.status === "rejected";
+    const isResolved = isFinalized || isApproved || isRejected;
+
+    // Identificar relação do usuário com a notificação
+    const isOrigin = n.setor_ref?.nome?.trim().toLowerCase() === userSector.trim().toLowerCase();
+    const isTarget = n.setor?.nome?.trim().toLowerCase() === userSector.trim().toLowerCase();
+    
+    // Lógica de "Pendência de Ciência": 
+    // Se aprovado, é pendente para a origem. Se rejeitado, é pendente para o destino.
+    let isRead = isFinalized;
+    if (isApproved && !isOrigin) isRead = true; 
+    if (isRejected && !isTarget) isRead = true;
+    if (n.status === "pending" && !isTarget) isRead = true; // Pendente normal só o alvo vê
+    if (n.status === "disputed") isRead = true; // Em disputa ninguém vê como pendente "de ação" até o PMO julgar
+    
+    // Se a notificação foi transferida e o usuário é o novo destino, marcar como não lida
+    if (n.status === "pending" && isTarget) {
+      isRead = false;
+    }
+    
+    // Determinar os pontos reais
+    let calculatedPoints = 0;
+    const isProactiveImprovement = !n.id_setor_ref && n.nao_no_checklist;
+    
+    // Determinar o "tipo" visual (error = vermelho, success = verde, message = cinza)
+    let visualType: Notification["type"] = "error";
+    if (n.status === "accepted" || isProactiveImprovement) {
+      visualType = "success";
+    } else if (n.status === "rejected" || n.status === "disputed") {
+      visualType = "message";
+    }
+
+    if (isProactiveImprovement) {
+      calculatedPoints = 100;
+    } else {
+      calculatedPoints = (n.notified ? -50 : -100) + (n.nao_no_checklist ? 100 : 0);
+    }
+
+    return {
+      id: `db-${n.id}`,
+      type: visualType,
+      title: isProactiveImprovement 
+        ? "Melhoria de Processo"
+        : isFinalized 
+          ? (n.status === "rejected" ? "Notificação Rejeitada" : "Notificação Finalizada")
+          : (isApproved ? "Julgamento: Aprovada" : isRejected ? "Julgamento: Recusada" : (n.notified ? "Reincidência" : "Notificação de Erro")),
+      description: n.description,
+      timestamp: n.created_at,
+      read: isRead,
+      priority: isRead ? "low" : "high",
+      fromSector: n.setor_ref?.nome || "PMO",
+      fromUnidade: n.unidade_ref?.nome || "PMO",
+      toSector: n.setor?.nome,
+      unidade: n.unidade?.nome,
+      errorType: isProactiveImprovement ? undefined : (n.notified ? "alert" : "absence"),
+      status: n.status || "pending",
+      points: calculatedPoints,
+      uploadUrl: n.upload_url,
+      justificativa: n.justificativa,
+      nao_no_checklist: n.nao_no_checklist,
+      comentario: n.comentario
+    };
+  });
+
   const fetchNotifications = async (currentSectors: any[]) => {
     try {
       let query = supabase
@@ -137,11 +208,8 @@ export default function Notifications() {
           s.nome.trim().toLowerCase() === userSector.trim().toLowerCase()
         );
         
-        if (mySector && mySector.unidade_id) {
-          // Se tiver unidade, vê tudo da unidade (recebidas e enviadas)
-          query = query.eq('unidade_id', mySector.unidade_id);
-        } else if (mySector) {
-          // Se não tiver unidade vinculada, vê o que enviou OU o que recebeu no setor
+        if (mySector) {
+          // Vê o que enviou OU o que recebeu no setor
           query = query.or(`setor_id.eq.${mySector.id},id_setor_ref.eq.${mySector.id}`);
         } else {
           setDbNotifications([]);
@@ -262,73 +330,45 @@ export default function Notifications() {
     fetchData();
   }, [role, userSector]);
 
-  // Transformar notificações do banco para o formato da interface UI
-  const mappedNotifications: Notification[] = dbNotifications.map(n => {
-    const isFinalized = n.status === "accepted";
-    const isApproved = n.status === "approved";
-    const isRejected = n.status === "rejected";
-    const isResolved = isFinalized || isApproved || isRejected;
+  // Efeito para abrir o modal caso venha um ID na URL - Processa apenas UMA vez por ID
+  useEffect(() => {
+    const idParam = searchParams.get("id");
+    if (idParam && mappedNotifications.length > 0) {
+      const targetId = idParam.startsWith('db-') ? idParam : `db-${idParam}`;
+      
+      // Se já abrimos esta notificação via URL nesta renderização, não fazemos nada
+      if (selectedNotification?.id === targetId && isDetailsOpen) {
+        return;
+      }
 
-    // Identificar relação do usuário com a notificação
-    const isOrigin = n.setor_ref?.nome?.trim().toLowerCase() === userSector.trim().toLowerCase();
-    const isTarget = n.setor?.nome?.trim().toLowerCase() === userSector.trim().toLowerCase();
-    
-    // Lógica de "Pendência de Ciência": 
-    // Se aprovado, é pendente para a origem. Se rejeitado, é pendente para o destino.
-    let isRead = isFinalized;
-    if (isApproved && !isOrigin) isRead = true; 
-    if (isRejected && !isTarget) isRead = true;
-    if (n.status === "pending" && !isTarget) isRead = true; // Pendente normal só o alvo vê
-    if (n.status === "disputed") isRead = true; // Em disputa ninguém vê como pendente "de ação" até o PMO julgar
-    
-    // Se a notificação foi transferida e o usuário é o novo destino, marcar como não lida
-    if (n.status === "pending" && isTarget) {
-      isRead = false;
+      const notification = mappedNotifications.find(n => n.id === targetId);
+      if (notification) {
+        setSelectedNotification(notification);
+        setIsDetailsOpen(true);
+        
+        // Limpar a URL IMEDIATAMENTE e SILENCIOSAMENTE
+        const url = new URL(window.location.href);
+        url.searchParams.delete("id");
+        window.history.replaceState({}, '', url.pathname + url.search);
+        
+        // Sincronizar o estado do searchParams do React Router sem disparar novo render agressivo
+        setSearchParams({}, { replace: true });
+      }
     }
-    
-    // Determinar os pontos reais
-    let calculatedPoints = 0;
-    const isProactiveImprovement = !n.id_setor_ref && n.nao_no_checklist;
-    
-    // Determinar o "tipo" visual (error = vermelho, success = verde, message = cinza)
-    let visualType: Notification["type"] = "error";
-    if (n.status === "accepted" || isProactiveImprovement) {
-      visualType = "success";
-    } else if (n.status === "rejected" || n.status === "disputed") {
-      visualType = "message";
-    }
+  }, [searchParams, mappedNotifications, isDetailsOpen, selectedNotification]);
 
-    if (isProactiveImprovement) {
-      calculatedPoints = 100;
+  const handleCloseDetails = (open: boolean) => {
+    if (!open) {
+      setIsDetailsOpen(false);
+      setSelectedNotification(null);
+      // Forçar limpeza do searchParams se ainda houver
+      if (searchParams.get("id")) {
+        setSearchParams({}, { replace: true });
+      }
     } else {
-      calculatedPoints = (n.notified ? -50 : -100) + (n.nao_no_checklist ? 100 : 0);
+      setIsDetailsOpen(true);
     }
-
-    return {
-      id: `db-${n.id}`,
-      type: visualType,
-      title: isProactiveImprovement 
-        ? "Melhoria de Processo"
-        : isFinalized 
-          ? (n.status === "rejected" ? "Notificação Rejeitada" : "Notificação Finalizada")
-          : (isApproved ? "Julgamento: Aprovada" : isRejected ? "Julgamento: Recusada" : (n.notified ? "Reincidência" : "Notificação de Erro")),
-      description: n.description,
-      timestamp: n.created_at,
-      read: isRead,
-      priority: isRead ? "low" : "high",
-      fromSector: n.setor_ref?.nome || "PMO",
-      fromUnidade: n.unidade_ref?.nome || "PMO",
-      toSector: n.setor?.nome,
-      unidade: n.unidade?.nome,
-      errorType: isProactiveImprovement ? undefined : (n.notified ? "alert" : "absence"),
-      status: n.status || "pending",
-      points: calculatedPoints,
-      uploadUrl: n.upload_url,
-      justificativa: n.justificativa,
-      nao_no_checklist: n.nao_no_checklist,
-      comentario: n.comentario
-    };
-  });
+  };
 
   const handleUpdateStatus = async (id: string, newStatus: string) => {
     try {
@@ -734,11 +774,8 @@ export default function Notifications() {
   };
 
   const unreadCount = allNotifications.filter(n => n.status === "pending").length;
-  // Para o PMO, disputeCount foca em status "disputed"
-  // Para os demais, disputeCount foca em status "pending"
-  const disputeCount = role === "pmo" 
-    ? allNotifications.filter(n => n.status === "disputed").length
-    : unreadCount;
+  // Para todos os perfis, disputeCount foca em status "disputed"
+  const disputeCount = allNotifications.filter(n => n.status === "disputed").length;
 
   return (
     <AppLayout title="Notificações" subtitle={getSubtitle()}>
@@ -774,7 +811,7 @@ export default function Notifications() {
                 <Gavel className="w-5 h-5 text-warning" />
               </div>
               <div>
-                <p className="text-sm text-muted-foreground">{role === "pmo" ? "Disputas" : "Pendentes"}</p>
+                <p className="text-sm text-muted-foreground">Disputas</p>
                 <p className="text-2xl font-bold text-foreground">{disputeCount}</p>
               </div>
             </div>
@@ -805,7 +842,7 @@ export default function Notifications() {
               <TabsTrigger value="unread">Em aberto ({unreadCount})</TabsTrigger>
               {(role === "pmo" || role === "manager") && (
                 <TabsTrigger value="disputes">
-                  {role === "pmo" ? `Disputas (${disputeCount})` : `Pendentes (${disputeCount})`}
+                  Disputas ({disputeCount})
                 </TabsTrigger>
               )}
             </TabsList>
@@ -1100,7 +1137,7 @@ export default function Notifications() {
                       return n.status === "pending";
                     }
                     if (activeTab === "disputes") {
-                      return n.status === "pending";
+                      return n.status === "disputed";
                     }
                     return true;
                   })
@@ -1241,7 +1278,7 @@ export default function Notifications() {
         </Tabs>
 
         {/* Notification Details Dialog */}
-        <Dialog open={isDetailsOpen} onOpenChange={setIsDetailsOpen}>
+        <Dialog open={isDetailsOpen} onOpenChange={handleCloseDetails}>
           <DialogContent className="max-w-2xl">
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2">

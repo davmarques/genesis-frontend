@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, ReactNode } from "react";
 
-export type UserRole = "pmo" | "manager" | "collaborator";
+export type UserRole = "pmo" | "manager" | "collaborator" | "comercial";
 
 interface RoleContextType {
   role: UserRole;
@@ -35,6 +35,7 @@ export const normalizeRole = (role: string): UserRole => {
   if (r === "pmo") return "pmo";
   if (r === "manager" || r === "coordinator" || r === "coordenador" || r === "gestor") return "manager";
   if (r === "collaborator" || r === "colaborador") return "collaborator";
+  if (r === "comercial" || r === "commercial") return "comercial";
   return "pmo"; // Default
 };
 
@@ -74,6 +75,18 @@ const getRolePermissions = (role: UserRole) => {
         canAssignTasks: false,
         canViewAllSectors: false,
         canExportReports: false,
+        canImportChecklists: false,
+      };
+    case "comercial":
+      return {
+        canValidateChecklists: false,
+        canJudgeDisputes: false,
+        canManageUsers: false,
+        canManageSectors: false,
+        canReportErrors: true,
+        canAssignTasks: false,
+        canViewAllSectors: false,
+        canExportReports: true,
         canImportChecklists: false,
       };
   }

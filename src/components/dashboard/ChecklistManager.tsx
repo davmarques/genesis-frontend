@@ -1,17 +1,24 @@
 import { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
-import { 
+import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Plus, CheckCircle2, Clock, AlertCircle, Star, Loader2, Send } from "lucide-react";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
+import { Plus, CheckCircle2, Clock, AlertCircle, Star, Loader2, Send, FileText } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { supabase } from "@/lib/supabase";
 import { apiFetch } from "@/lib/api";
@@ -27,6 +34,10 @@ interface ChecklistItem {
   priority: "low" | "medium" | "high";
   assignedTo?: string;
   dueDate: string;
+  servico?: {
+    id: number;
+    nome: string;
+  };
 }
 
 interface ChecklistManagerProps {
@@ -40,9 +51,10 @@ export const ChecklistManager = ({ role: componentRole }: ChecklistManagerProps)
   const [selectedSectorId, setSelectedSectorId] = useState<string | null>(null);
   const [newActivityTitle, setNewActivityTitle] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
-  
+
   const { role, userSectorId, userUnitId } = useRole();
   const { toast } = useToast();
+  const navigate = useNavigate();
 
   // Inicializar o setor selecionado com o setor do usuário, se houver
   useEffect(() => {
@@ -59,7 +71,7 @@ export const ChecklistManager = ({ role: componentRole }: ChecklistManagerProps)
         query = query.eq('unidade_id', userUnitId);
       }
       const { data, error } = await query.order('nome');
-      
+
       if (error) {
         console.error("Erro Supabase ao buscar setores:", error);
         // Fallback para apiFetch se disponível e erro de permissão
@@ -72,7 +84,7 @@ export const ChecklistManager = ({ role: componentRole }: ChecklistManagerProps)
       };
 
       setSectors(data || []);
-      
+
       // Se tiver setores mas nenhum selecionado, e o usuário tiver um setor vinculado
       if (data && data.length > 0 && !selectedSectorId && userSectorId) {
         setSelectedSectorId(userSectorId.toString());
@@ -84,12 +96,12 @@ export const ChecklistManager = ({ role: componentRole }: ChecklistManagerProps)
 
   const fetchChecklists = async () => {
     if (!selectedSectorId && role !== 'pmo') return;
-    
+
     try {
       setIsLoading(true);
       let query = supabase
         .from('checklist')
-        .select('*')
+        .select('*, servico(id, nome)')
         .order('created_at', { ascending: false });
 
       if (selectedSectorId) {
@@ -106,10 +118,11 @@ export const ChecklistManager = ({ role: componentRole }: ChecklistManagerProps)
         title: item.title || item.titulo, // Suporte a ambos os nomes de coluna caso variem
         description: item.description || '',
         points: item.points || 0,
-        status: (item.status === 'completed' ? 'completed' : 
-                 item.status === 'overdue' ? 'overdue' : 'pending'),
+        status: (item.status === 'completed' ? 'completed' :
+          item.status === 'overdue' ? 'overdue' : 'pending'),
         priority: item.priority || 'medium',
-        dueDate: item.dueDate || item.created_at ? new Date(item.dueDate || item.created_at).toLocaleDateString('pt-BR') : 'Sem data'
+        dueDate: item.dueDate || item.created_at ? new Date(item.dueDate || item.created_at).toLocaleDateString('pt-BR') : 'Sem data',
+        servico: item.servico
       }));
 
       setItems(formatted as ChecklistItem[]);
@@ -169,7 +182,7 @@ export const ChecklistManager = ({ role: componentRole }: ChecklistManagerProps)
         title: "Sucesso (+100 pts)",
         description: "Atividade cadastrada e pontos creditados!",
       });
-      
+
       setNewActivityTitle("");
       fetchChecklists();
     } catch (error: any) {
@@ -185,17 +198,17 @@ export const ChecklistManager = ({ role: componentRole }: ChecklistManagerProps)
 
   const toggleItem = async (id: string, currentStatus: string) => {
     const newStatus = currentStatus === "completed" ? "pending" : "completed";
-    
+
     try {
       const { error } = await supabase
         .from('checklist')
         .update({ status: newStatus })
         .eq('id', id);
-      
+
       if (error) throw error;
-      
-      setItems(items.map(item => 
-        item.id === id 
+
+      setItems(items.map(item =>
+        item.id === id
           ? { ...item, status: newStatus as any }
           : item
       ));
@@ -230,48 +243,25 @@ export const ChecklistManager = ({ role: componentRole }: ChecklistManagerProps)
               {role === "collaborator" ? "Minhas Atividades" : "Checklist do Setor"}
             </h3>
             <p className="text-sm text-muted-foreground mt-1">
-              {isLoading ? "Carregando..." : `${items.filter(i => i.status === "pending").length} atividades pendentes`}
+              {isLoading ? "Carregando..." : ""}
             </p>
           </div>
-
-          <div className="w-full md:w-64">
-            <Select 
-              value={selectedSectorId || ""} 
-              onValueChange={setSelectedSectorId}
-            >
-              <SelectTrigger className="bg-background">
-                <SelectValue placeholder={sectors.length === 0 ? "Carregando setores..." : "Selecionar Setor"} />
-              </SelectTrigger>
-              <SelectContent>
-                {sectors.length === 0 ? (
-                  <SelectItem value="none" disabled>Nenhum setor encontrado</SelectItem>
-                ) : (
-                  sectors.map((s) => (
-                    <SelectItem key={s.id} value={s.id.toString()}>
-                      {s.nome}
-                    </SelectItem>
-                  ))
-                )}
-              </SelectContent>
-            </Select>
-          </div>
+          {(role === "manager" || role === "pmo") && (
+            <div className="flex justify-end gap-2">
+              <Button
+                type="button"
+                onClick={() => navigate("/checklists")}
+                className="gap-2 bg-primary hover:bg-primary/90"
+              >
+                <Plus className="w-4 h-4" />
+                Cadastrar
+              </Button>
+            </div>
+          )}
         </div>
-
-        {(role === "manager" || role === "pmo") && (
-          <form onSubmit={handleAddActivity} className="flex gap-2">
-            <Input 
-              placeholder="Cadastrar nova atividade do setor..." 
-              value={newActivityTitle}
-              onChange={(e) => setNewActivityTitle(e.target.value)}
-              className="flex-1"
-            />
-            <Button type="submit" disabled={isSubmitting} className="gap-2 bg-primary hover:bg-primary/90">
-              {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-              Cadastrar
-            </Button>
-          </form>
-        )}
       </div>
+
+
 
       <div className="space-y-3">
         {isLoading ? (
@@ -282,81 +272,62 @@ export const ChecklistManager = ({ role: componentRole }: ChecklistManagerProps)
           <div className="text-center py-8 text-muted-foreground italic">
             Nenhuma atividade encontrada para {selectedSectorId ? `o setor ${sectors.find(s => s.id.toString() === selectedSectorId)?.nome}` : "este setor"}.
             <br />
-            { (role === "manager" || role === "pmo") && "Use o campo acima para cadastrar uma nova atividade."}
+            {(role === "manager" || role === "pmo") && "Use o campo acima para cadastrar uma nova atividade."}
           </div>
         ) : (
-          items.map((item) => (
-            <div
-              key={item.id}
-              className={cn(
-                "p-4 rounded-lg border-2 transition-all",
-                item.status === "completed" 
-                  ? "bg-success/5 border-success/30" 
-                  : item.status === "overdue"
-                  ? "bg-destructive/5 border-destructive/30"
-                  : "bg-card border-border hover:border-primary/50"
-              )}
-            >
-              <div className="flex items-start gap-4">
-                <div className="pt-1">
-                  <Checkbox
-                    checked={item.status === "completed"}
-                    onCheckedChange={() => toggleItem(item.id, item.status)}
-                    className="border-2"
-                  />
-                </div>
-                
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-start justify-between gap-4 mb-2">
-                    <div className="flex-1">
+          <Accordion type="single" collapsible className="space-y-3">
+            {items.map((item) => (
+              <AccordionItem
+                key={item.id}
+                value={item.id}
+                className={cn(
+                  "border rounded-lg bg-card transition-all",
+                  item.status === "completed"
+                    ? "bg-success/5 border-success/30"
+                    : item.status === "overdue"
+                      ? "bg-destructive/5 border-destructive/30"
+                      : "border-border hover:border-primary/50"
+                )}
+              >
+                <AccordionTrigger className="flex-1 py-4 px-4 hover:no-underline w-full">
+                  <div className="flex flex-col items-start gap-1 text-left w-full">
+                    <div className="flex items-center gap-2">
                       <h4 className={cn(
-                        "font-semibold text-foreground mb-1",
+                        "font-semibold text-foreground",
                         item.status === "completed" && "line-through text-muted-foreground"
                       )}>
                         {item.title}
                       </h4>
-                      <p className="text-sm text-muted-foreground">{item.description}</p>
                     </div>
-                    <div className="flex items-center gap-2 flex-shrink-0">
-                      {item.points === 100 && (
-                        <Star className="w-4 h-4 text-gold fill-gold" />
-                      )}
-                      <Badge className="bg-primary/10 text-primary border-primary/30 font-bold">
-                        +{item.points}
-                      </Badge>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-3 flex-wrap">
-                    <div className="flex items-center gap-2">
-                      {getStatusIcon(item.status)}
-                      <span className="text-xs text-muted-foreground">{item.dueDate}</span>
-                    </div>
-                    
-                    <Badge variant="outline" className={getPriorityBadge(item.priority)}>
-                      {item.priority === "high" ? "Alta" : item.priority === "medium" ? "Média" : "Baixa"}
-                    </Badge>
-
-                    {item.assignedTo && (
-                      <span className="text-xs text-muted-foreground">
-                        Responsável: {item.assignedTo}
-                      </span>
+                    {item.description && (
+                      <p className="text-xs text-muted-foreground line-clamp-1">{item.description}</p>
                     )}
                   </div>
-                </div>
-              </div>
-            </div>
-          ))
-        )}
-      </div>
+                </AccordionTrigger>
 
-      <div className="mt-6 p-4 bg-muted/50 rounded-lg border border-border">
-        <div className="flex items-center justify-between text-sm">
-          <span className="text-muted-foreground">Total de pontos possíveis:</span>
-          <span className="text-xl font-bold text-foreground">
-            {items.reduce((acc, item) => acc + item.points, 0)} pontos
-          </span>
-        </div>
+                <AccordionContent className="pb-4 px-4 border-t border-dashed mt-0">
+                  <div className="space-y-4 pt-4">
+                    <div className="space-y-4">
+                      <h5 className="text-sm font-bold flex items-center gap-2 text-primary/80">
+                        <FileText className="w-4 h-4" />
+                        Serviço(s) Vinculado(s)
+                      </h5>
+                      {item.servico ? (
+                        <div className="p-3 bg-primary/5 border border-primary/10 rounded-lg flex items-center justify-between">
+                          <span className="font-medium text-sm">{item.servico.nome}</span>
+                        </div>
+                      ) : (
+                        <div className="p-3 bg-muted/20 border border-dashed rounded-lg text-sm text-muted-foreground italic text-center">
+                          Nenhum serviço vinculado a esta atividade
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </AccordionContent>
+              </AccordionItem>
+            ))}
+          </Accordion>
+        )}
       </div>
     </Card>
   );

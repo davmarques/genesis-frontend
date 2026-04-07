@@ -125,11 +125,11 @@ export function AppLayout({ children, title, subtitle }: AppLayoutProps) {
   };
 
   const navItems = [
-    { path: "/dashboard", icon: Trophy, label: "Dashboard" },
+    { path: "/dashboard", icon: Trophy, label: "Dashboard", hideFor: ["comercial"] },
     { path: "/checklists", icon: FileText, label: "Checklists" },
-    { path: "/teams", icon: Users, label: "Equipes", hideFor: ["collaborator"] },
-    { path: "/notifications", icon: Bell, label: "Notificações", badge: disputeCount },
-    { path: "/reports", icon: TrendingUp, label: "Relatórios", hideFor: ["collaborator"] },
+    { path: "/teams", icon: Users, label: "Equipes", hideFor: ["collaborator", "comercial"] },
+    { path: "/notifications", icon: Bell, label: "Notificações", badge: disputeCount, hideFor: ["comercial"] },
+    { path: "/reports", icon: TrendingUp, label: "Relatórios", hideFor: ["collaborator", "comercial"] },
   ];
 
   const filteredNavItems = navItems.filter(

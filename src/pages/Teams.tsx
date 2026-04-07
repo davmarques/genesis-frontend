@@ -21,10 +21,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { 
-  Plus, 
-  Search, 
-  Mail, 
+import {
+  Plus,
+  Search,
+  Mail,
   Phone,
   MoreVertical,
   TrendingUp,
@@ -36,8 +36,27 @@ import {
   Settings,
   Loader2,
   Trophy,
-  CheckCircle2
+  CheckCircle2,
+  Trash2
 } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { ScoreCard } from "@/components/dashboard/ScoreCard";
 import { useRole, normalizeRole } from "@/contexts/RoleContext";
@@ -50,7 +69,7 @@ interface TeamMember {
   name: string;
   email: string;
   phone: string;
-  role: "pmo" | "manager" | "collaborator";
+  role: "pmo" | "manager" | "collaborator" | "comercial";
   sector: string;
   managedSectorName?: string;
   setor_id?: number | string;
@@ -95,6 +114,8 @@ export default function Teams() {
   const { role, rolePermissions, userSector, userUnitId, userSectorId } = useRole();
   const [activeTab, setActiveTab] = useState(role === "pmo" ? "sectors" : "members");
   const [isUserModalOpen, setIsUserModalOpen] = useState(false);
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+  const [memberToDelete, setMemberToDelete] = useState<TeamMember | null>(null);
 
   // Pre-fill form data for managers
   useEffect(() => {
@@ -171,15 +192,17 @@ export default function Teams() {
 
   const handleAddUser = async (e: React.FormEvent) => {
     e.preventDefault();
-    
-    if (!formData.unidade_id) {
-      toast.error("Por favor, selecione uma unidade.");
-      return;
-    }
-    
-    if (!formData.sector) {
-      toast.error("Por favor, selecione um setor.");
-      return;
+
+    if (formData.role !== "comercial") {
+      if (!formData.unidade_id) {
+        toast.error("Por favor, selecione uma unidade.");
+        return;
+      }
+
+      if (!formData.sector) {
+        toast.error("Por favor, selecione um setor.");
+        return;
+      }
     }
 
     setIsSubmitting(true);
@@ -194,8 +217,8 @@ export default function Teams() {
           email: formData.email,
           cpf: formData.cpf,
           role: formData.role,
-          sector: formData.sector,
-          unidade_id: parseInt(formData.unidade_id)
+          sector: formData.role === "comercial" ? "Comercial" : formData.sector,
+          unidade_id: formData.role === "comercial" ? null : parseInt(formData.unidade_id)
         })
       });
       console.log("Resposta do servidor:", result);
@@ -218,6 +241,27 @@ export default function Teams() {
     }
   };
 
+  const handleDeleteMember = async () => {
+    if (!memberToDelete) return;
+
+    setIsSubmitting(true);
+    try {
+      await apiFetch(`/admin/users?id=${memberToDelete.id}`, {
+        method: "DELETE"
+      });
+
+      toast.success("Membro removido com sucesso!");
+      setMembers(prev => prev.filter(m => m.id !== memberToDelete.id));
+      setIsDeleteDialogOpen(false);
+      setMemberToDelete(null);
+    } catch (error: any) {
+      console.error("Erro ao deletar membro:", error);
+      toast.error(error.message || "Erro ao remover membro");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   const handleAddSector = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
@@ -225,11 +269,11 @@ export default function Teams() {
     try {
       const result = await apiFetch("/admin/sectors", {
         method: "POST",
-        body: JSON.stringify({ 
+        body: JSON.stringify({
           nome: newSectorFormData.nome,
           unidade_id: parseInt(newSectorFormData.unidade_id),
-          coordenador_id: (newSectorFormData.coordenador_id && newSectorFormData.coordenador_id !== "none") 
-            ? parseInt(newSectorFormData.coordenador_id) 
+          coordenador_id: (newSectorFormData.coordenador_id && newSectorFormData.coordenador_id !== "none")
+            ? parseInt(newSectorFormData.coordenador_id)
             : null
         })
       });
@@ -237,7 +281,7 @@ export default function Teams() {
       toast.success("Setor criado com sucesso!");
       setIsSectorModalOpen(false);
       setNewSectorFormData({ nome: "", unidade_id: "", coordenador_id: "" });
-      
+
       // Atualizar lista de setores
       const updatedSectors = await apiFetch("/admin/sectors");
       setSectors(updatedSectors);
@@ -260,22 +304,22 @@ export default function Teams() {
   // Filter based on role
   const filteredMembers = (members && members.length > 0 ? members : []).filter(m => {
     const searchLower = searchQuery.toLowerCase();
-    const matchesSearch = 
-      (m.name || "").toLowerCase().includes(searchLower) || 
+    const matchesSearch =
+      (m.name || "").toLowerCase().includes(searchLower) ||
       (m.email || "").toLowerCase().includes(searchLower) ||
       (m.sector || "").toLowerCase().includes(searchLower) ||
       (m.unidade_nome || "").toLowerCase().includes(searchLower);
-    
+
     if (!matchesSearch) return false;
 
     // PMO vê tudo
     if (role === "pmo") return true;
-    
+
     // Gestor e Colaborador vêem membros do seu próprio setor
     if (userSectorId && m.setor_id) {
       return String(m.setor_id) === String(userSectorId);
     }
-    
+
     return m.sector === userSector;
   });
 
@@ -291,15 +335,15 @@ export default function Teams() {
     if (!matchesSearch) return false;
 
     if (role === "pmo") return true;
-    
+
     if (userSectorId && s.id) {
       return String(s.id) === String(userSectorId);
     }
-    
+
     return s.nome === userSector;
   }).map(sector => {
-    const sectorMembers = members.filter(m => 
-      (m.setor_id && sector.id && String(m.setor_id) === String(sector.id)) || 
+    const sectorMembers = members.filter(m =>
+      (m.setor_id && sector.id && String(m.setor_id) === String(sector.id)) ||
       m.sector === sector.nome
     );
 
@@ -334,16 +378,18 @@ export default function Teams() {
     const variants = {
       pmo: "bg-gold/10 text-gold border-gold/30",
       manager: "bg-primary/10 text-primary border-primary/30",
-      collaborator: "bg-secondary/10 text-secondary-foreground border-secondary/30"
+      collaborator: "bg-secondary/10 text-secondary-foreground border-secondary/30",
+      comercial: "bg-blue-100 text-blue-700 border-blue-200"
     };
     const labels = {
       pmo: "PMO",
       manager: "Gestor",
-      collaborator: "Colaborador"
+      collaborator: "Colaborador",
+      comercial: "Comercial"
     };
     return (
-      <Badge variant="outline" className={variants[normalized as keyof typeof variants]}>
-        {labels[normalized as keyof typeof labels]}
+      <Badge variant="outline" className={variants[normalized as keyof typeof variants] || variants.collaborator}>
+        {labels[normalized as keyof typeof labels] || normalized}
       </Badge>
     );
   };
@@ -355,7 +401,7 @@ export default function Teams() {
         <div className="flex justify-between items-center">
           <div className="flex gap-2">
             {role === "pmo" && (
-              <Button 
+              <Button
                 className="gap-2 bg-primary hover:bg-primary/90"
                 onClick={() => setIsSectorModalOpen(true)}
               >
@@ -365,7 +411,7 @@ export default function Teams() {
             )}
           </div>
           {rolePermissions.canManageUsers && (
-            <Button 
+            <Button
               className="gap-2 bg-primary hover:bg-primary/90"
               onClick={() => setIsUserModalOpen(true)}
             >
@@ -392,8 +438,8 @@ export default function Teams() {
           <ScoreCard
             title="Pontos Totais"
             value={
-              notifications.length > 0 
-                ? (notifications.length * 50 + notifications.reduce((acc, n) => acc + (n.notified ? -50 : -100), 0)).toLocaleString('pt-BR') 
+              notifications.length > 0
+                ? (notifications.length * 50 + notifications.reduce((acc, n) => acc + (n.notified ? -50 : -100), 0)).toLocaleString('pt-BR')
                 : "0"
             }
             icon={Trophy}
@@ -435,7 +481,7 @@ export default function Teams() {
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               {filteredMembers.map((member) => {
                 const completionRate = getCompletionRate(member.tasksCompleted, member.totalTasks);
-                
+
                 return (
                   <Card key={member.id} className="p-6 hover:border-primary/50 transition-all">
                     <div className="flex items-start gap-4">
@@ -453,29 +499,39 @@ export default function Teams() {
                             </h3>
                             <div className="flex flex-wrap items-center gap-2 mb-2">
                               {getRoleBadge(member.role)}
-                              {member.isSectorManager && (
-                                <Badge className="bg-amber-100 text-amber-700 border-amber-200">
-                                  Líder do Setor
-                                </Badge>
-                              )}
                               <Badge variant="secondary" className="bg-blue-100 text-blue-700 border-blue-200">
                                 {member.unidade_nome || "Anchieta"}
                               </Badge>
-                              <Badge 
-                                variant="outline" 
-                                className={member.status === "active" 
-                                  ? "bg-success/10 text-success border-success/30" 
+                              <Badge
+                                variant="outline"
+                                className={member.status === "active"
+                                  ? "bg-success/10 text-success border-success/30"
                                   : "bg-muted text-muted-foreground"}
                               >
                                 {member.status === "active" ? "Ativo" : "Inativo"}
                               </Badge>
-                              <Badge variant="outline">Nível {member.level}</Badge>
                             </div>
                           </div>
                           {rolePermissions.canManageUsers && (
-                            <Button variant="ghost" size="icon">
-                              <MoreVertical className="w-4 h-4" />
-                            </Button>
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <Button variant="ghost" size="icon">
+                                  <MoreVertical className="w-4 h-4" />
+                                </Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end">
+                                <DropdownMenuItem 
+                                  className="text-destructive focus:text-destructive cursor-pointer"
+                                  onClick={() => {
+                                    setMemberToDelete(member);
+                                    setIsDeleteDialogOpen(true);
+                                  }}
+                                >
+                                  <Trash2 className="w-4 h-4 mr-2" />
+                                  Excluir
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
                           )}
                         </div>
 
@@ -494,22 +550,6 @@ export default function Teams() {
                           <div>
                             <p className="text-xs text-muted-foreground mb-1">Setor</p>
                             <Badge variant="outline">{member.sector}</Badge>
-                          </div>
-                          <div>
-                            <p className="text-xs text-muted-foreground mb-1">Pontos</p>
-                            <Badge className="bg-primary/10 text-primary border-primary/30 font-bold">
-                              {member.points}
-                            </Badge>
-                          </div>
-                          <div>
-                            <p className="text-xs text-muted-foreground mb-1">Tarefas</p>
-                            <p className="text-sm font-semibold text-foreground">
-                              {member.tasksCompleted}/{member.totalTasks}
-                            </p>
-                          </div>
-                          <div>
-                            <p className="text-xs text-muted-foreground mb-1">Taxa</p>
-                            <p className="text-sm font-semibold text-foreground">{completionRate}%</p>
                           </div>
                         </div>
 
@@ -539,12 +579,11 @@ export default function Teams() {
                   <Card key={sector.id} className="p-6 hover:border-primary/50 transition-all">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-4">
-                        <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold ${
-                          index === 0 ? "bg-gradient-to-r from-gold to-warning text-gold-foreground" :
-                          index === 1 ? "bg-gradient-to-r from-muted to-border text-foreground" :
-                          index === 2 ? "bg-gradient-to-r from-amber-700 to-amber-500 text-white" :
-                          "bg-muted text-foreground"
-                        }`}>
+                        <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold ${index === 0 ? "bg-gradient-to-r from-gold to-warning text-gold-foreground" :
+                            index === 1 ? "bg-gradient-to-r from-muted to-border text-foreground" :
+                              index === 2 ? "bg-gradient-to-r from-amber-700 to-amber-500 text-white" :
+                                "bg-muted text-foreground"
+                          }`}>
                           {index + 1}
                         </div>
                         <div>
@@ -592,15 +631,15 @@ export default function Teams() {
                 {members
                   .filter(m => m.isSectorManager || normalizeRole(m.role) === "manager")
                   .map((managerMember) => {
-                    const mySector = sectors.find(s => 
+                    const mySector = sectors.find(s =>
                       String(s.coordenador_id) === String(managerMember.id) ||
                       String((s as any).manager_id) === String(managerMember.id) ||
                       s.nome === managerMember.managedSectorName ||
                       s.nome === managerMember.sector
                     );
 
-                    const sectorMembers = members.filter(m => 
-                      (m.setor_id && mySector?.id && String(m.setor_id) === String(mySector.id)) || 
+                    const sectorMembers = members.filter(m =>
+                      (m.setor_id && mySector?.id && String(m.setor_id) === String(mySector.id)) ||
                       (m.sector === mySector?.nome)
                     );
 
@@ -706,6 +745,7 @@ export default function Teams() {
                     <SelectContent>
                       <SelectItem value="manager">Gestor</SelectItem>
                       <SelectItem value="collaborator">Colaborador</SelectItem>
+                      <SelectItem value="comercial">Comercial</SelectItem>
                       {role === "pmo" && <SelectItem value="pmo">PMO</SelectItem>}
                     </SelectContent>
                   </Select>
@@ -727,7 +767,7 @@ export default function Teams() {
                   <Select
                     value={formData.unidade_id}
                     onValueChange={(value) => setFormData({ ...formData, unidade_id: value, sector: "" })}
-                    disabled={isSubmitting || isLoadingSectors || role === "manager"}
+                    disabled={isSubmitting || isLoadingSectors || role === "manager" || formData.role === "comercial"}
                   >
                     <SelectTrigger>
                       {isLoadingSectors ? (
@@ -759,7 +799,7 @@ export default function Teams() {
                   <Select
                     value={formData.sector}
                     onValueChange={(value) => setFormData({ ...formData, sector: value })}
-                    disabled={isSubmitting || isLoadingSectors || !formData.unidade_id || role === "manager"}
+                    disabled={isSubmitting || isLoadingSectors || !formData.unidade_id || role === "manager" || formData.role === "commercial"}
                   >
                     <SelectTrigger>
                       {isLoadingSectors ? (
@@ -790,9 +830,9 @@ export default function Teams() {
                 </div>
               </div>
               <DialogFooter className="pt-4">
-                <Button 
-                  type="button" 
-                  variant="outline" 
+                <Button
+                  type="button"
+                  variant="outline"
                   onClick={() => setIsUserModalOpen(false)}
                   disabled={isSubmitting}
                 >
@@ -805,6 +845,40 @@ export default function Teams() {
             </form>
           </DialogContent>
         </Dialog>
+
+        {/* Delete Confirmation Modal */}
+        <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Você tem certeza?</AlertDialogTitle>
+              <AlertDialogDescription>
+                Esta ação não pode ser desfeita. Isso excluirá permanentemente o usuário
+                <span className="font-bold text-foreground mx-1">{memberToDelete?.name}</span>
+                e removerá todos os dados associados de nossos servidores.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={isSubmitting}>Cancelar</AlertDialogCancel>
+              <AlertDialogAction
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                onClick={(e) => {
+                  e.preventDefault();
+                  handleDeleteMember();
+                }}
+                disabled={isSubmitting}
+              >
+                {isSubmitting ? (
+                  <div className="flex items-center gap-2">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Excluindo...</span>
+                  </div>
+                ) : (
+                  "Confirmar Exclusão"
+                )}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
 
         {/* Add Sector Modal */}
         <Dialog open={isSectorModalOpen} onOpenChange={setIsSectorModalOpen}>
@@ -868,9 +942,9 @@ export default function Teams() {
                 </Select>
               </div>
               <DialogFooter className="pt-4">
-                <Button 
-                  type="button" 
-                  variant="outline" 
+                <Button
+                  type="button"
+                  variant="outline"
                   onClick={() => setIsSectorModalOpen(false)}
                   disabled={isSubmitting}
                 >

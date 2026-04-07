@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -22,7 +23,8 @@ import {
   Award,
   Loader2,
   ChevronDown,
-  Bell
+  Bell,
+  Eye
 } from "lucide-react";
 import { ScoreCard } from "@/components/dashboard/ScoreCard";
 import { RankingTable } from "@/components/dashboard/RankingTable";
@@ -33,229 +35,149 @@ import { TeamManager } from "@/components/dashboard/TeamManager";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { useRole } from "@/contexts/RoleContext";
 import { supabase } from "@/lib/supabase";
+import { useQuery } from "@tanstack/react-query";
+import { useMemo } from "react";
 
 const Dashboard = () => {
   const { role, userSector, userSectorId } = useRole();
-  const [stats, setStats] = useState({
-    totalSectors: 0,
-    totalMembers: 0,
-    pendingDisputes: 0,
-    totalPoints: 0,
-    sectorRank: "0º",
-    sectorPoints: 0,
-    sectorMembers: 0,
-    pendingChecklists: 0,
-    completionRate: "0%",
-    userPoints: 0,
-    userNotices: 0
-  });
-  const [disputes, setDisputes] = useState<any[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const navigate = useNavigate();
 
-  useEffect(() => {
-    const fetchDashboardData = async () => {
-      setIsLoading(true);
-      try {
-        // Otimização: Se não for PMO, filtramos na query do Supabase para reduzir carga de dados
-        let notificationsQuery = supabase.from('notificacoes').select(`
-          *,
-          setor:setor_id(nome),
-          unidade:unidade_id(nome),
-          setor_ref:id_setor_ref(nome),
-          unidade_ref:id_unidade_ref(nome)
-        `);
+  // 1. Fetch de Dados com React Query (Centralizado e com Cache)
+  const { data: dashboardData, isLoading } = useQuery({
+    queryKey: ['dashboardData', role, userSectorId],
+    queryFn: async () => {
+      // Filtro de data: últimos 3 meses para o Dashboard (mais focado no presente)
+      const threeMonthsAgo = new Date();
+      threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
+      const dateStr = threeMonthsAgo.toISOString();
 
-        // Query direta de setores (substituindo apiFetch)
-        let sectorsQuery = supabase.from('setor').select(`
-          id,
-          nome,
-          unidade_id,
-          coordenador_id,
-          unidade:unidade(nome),
-          coordenador:users!coordenador_id(id, name, email)
-        `).order('nome');
+      let nQuery = supabase.from('notificacoes').select(`
+        *,
+        setor:setor_id(nome),
+        unidade:unidade_id(nome),
+        setor_ref:id_setor_ref(nome),
+        unidade_ref:id_unidade_ref(nome)
+      `).gte('created_at', dateStr);
 
-        // Query direta de membros (substituindo apiFetch)
-        let membersQuery = supabase.from('users').select(`
-          id,
-          name,
-          email,
-          role,
-          unidade_id,
-          unidade:unidade!users_unidade_id_fkey(nome),
-          setor_id,
-          setor:setor!users_setor_id_fkey(nome),
-          coordinated_sectors:setor!coordenador_id(nome),
-          created_at
-        `).order('name');
+      let sQuery = supabase.from('setor').select(`
+        id, nome, unidade_id, coordenador_id,
+        unidade:unidade(nome),
+        coordenador:users!coordenador_id(id, name, email)
+      `).order('nome');
 
-        if (role !== "pmo" && userSectorId) {
-          // Filtrar notificações que envolvam o setor do usuário (como origem ou destino)
-          notificationsQuery = notificationsQuery.or(`setor_id.eq.${userSectorId},id_setor_ref.eq.${userSectorId}`);
-          // Filtrar setores e membros na fonte para melhor performance
-          sectorsQuery = sectorsQuery.eq('id', userSectorId);
-          membersQuery = membersQuery.eq('setor_id', userSectorId);
-        }
+      let mQuery = supabase.from('users').select(`
+        id, name, email, role, unidade_id, setor_id, created_at,
+        unidade:unidade!users_unidade_id_fkey(nome),
+        setor:setor!users_setor_id_fkey(nome),
+        coordinated_sectors:setor!coordenador_id(nome)
+      `).order('name');
 
-        const [sectorsResult, membersResult, notificationsResult] = await Promise.all([
-          sectorsQuery,
-          membersQuery,
-          notificationsQuery
-        ]);
-
-        // Formatar setores (replicando lógica do backend /admin/sectors)
-        let sectorsList = (sectorsResult.data || []).map((s: any) => ({
-          id: s.id,
-          nome: s.nome,
-          unidade_id: s.unidade_id,
-          coordenador_id: s.coordenador_id,
-          unidade_nome: s.unidade?.nome || 'Nenhuma',
-          manager: s.coordenador?.name || 'Não definido',
-          manager_email: s.coordenador?.email || '',
-          manager_id: s.coordenador?.id || null,
-          membersCount: 0,
-          completionRate: 0,
-          score: 0
-        }));
-
-        // Formatar membros (replicando lógica do backend /admin/members)
-        let membersList = (membersResult.data || []).map((u: any) => {
-          const dbRole = String(u.role || '').toLowerCase();
-          let roleLabel = dbRole;
-          if (dbRole.includes('coord') || dbRole.includes('manager') || dbRole.includes('gestor')) roleLabel = 'manager';
-          else if (dbRole.includes('colab') || dbRole.includes('labor')) roleLabel = 'collaborator';
-          else if (dbRole.includes('pmo')) roleLabel = 'pmo';
-
-          const coordinated = u.coordinated_sectors;
-          const firstCoordinated = Array.isArray(coordinated) ? coordinated[0] : coordinated;
-
-          return {
-            ...u,
-            role: roleLabel,
-            sector: u.setor?.nome || 'Nenhum',
-            unidade_nome: u.unidade?.nome || 'Nenhuma',
-            isSectorManager: !!firstCoordinated,
-            managedSectorName: firstCoordinated?.nome,
-            phone: '(11) 99999-9999',
-            status: 'active',
-            tasksCompleted: 0,
-            totalTasks: 0,
-            points: 0,
-            level: 1,
-            joinDate: u.created_at ? new Date(u.created_at).toISOString().split('T')[0] : new Date().toISOString().split('T')[0]
-          };
-        });
-
-        let notificationsList = (notificationsResult.data || []) as any[];
-
-        // Buscar objeto do setor do usuário logado usando ID (mais performático que nome)
-        const currentUserSectorObj = userSectorId 
-          ? sectorsList.find(s => String(s.id) === String(userSectorId))
-          : sectorsList.find(s => s.nome?.trim().toLowerCase() === userSector?.trim().toLowerCase());
-
-        // Se não for PMO, garantimos a filtragem final em memória para segurança
-        if (role !== "pmo" && currentUserSectorObj) {
-          sectorsList = sectorsList.filter(s => s.id === currentUserSectorObj.id);
-          membersList = membersList.filter(m => m.setor_id === currentUserSectorObj.id);
-          notificationsList = notificationsList.filter(n => 
-            n.setor_id === currentUserSectorObj.id || n.id_setor_ref === currentUserSectorObj.id
-          );
-        }
-
-        const pmoStats = {
-          totalSectors: sectorsList.length,
-          totalMembers: membersList.length,
-          pendingDisputes: notificationsList.filter(n => {
-            const status = n.status?.toLowerCase();
-            return !status || ['disputed', 'contestada', 'pending', 'pendente'].includes(status);
-          }).length,
-          totalPoints: notificationsList.reduce((acc, n) => {
-            const isReport = !!n.id_setor_ref;
-            const basePoints = isReport ? 50 : 0;
-            
-            // Melhoria Voluntária: Sem reportador e com flag de checklist
-            if (!isReport && n.nao_no_checklist) {
-              return acc + 100;
-            }
-
-            const penalty = n.notified ? -50 : -100;
-            const reward = n.nao_no_checklist ? 100 : 0;
-            return acc + basePoints + penalty + reward;
-          }, 0)
-        };
-
-        const pendingList = notificationsList
-          .filter(n => {
-            const status = n.status?.toLowerCase();
-            return !status || ['disputed', 'contestada', 'pending', 'pendente'].includes(status);
-          })
-          .map(n => ({
-            id: n.id,
-            reporter: n.setor_ref?.nome || (n.id_setor_ref ? "Setor Desconhecido" : "Sistema"),
-            reported: n.setor?.nome || "Setor Auditado",
-            type: n.notified ? "Alerta" : (n.tipo_erro || "Ausência"),
-            description: n.description || n.descricao || "Sem descrição detalhada",
-            date: n.created_at,
-            status: n.status || 'pending'
-          }));
-
-        // Dados específicos do setor do coordenador/colaborador
-        const mySectorMembersCount = membersList.length;
-        
-        // Calcular pontos do setor
-        const sectorPoints = notificationsList.reduce((acc, n) => {
-          let score = acc;
-          const isTarget = currentUserSectorObj && n.setor_id === currentUserSectorObj.id;
-          const isReporter = currentUserSectorObj && n.id_setor_ref === currentUserSectorObj.id;
-
-          // Pontos por auditoria (quem reportou)
-          if (isReporter) {
-            score += 50;
-          }
-
-          // Pontos por erro/correção/melhoria (setor alvo)
-          if (isTarget) {
-            // Melhoria Proativa (Inclusão voluntária no checklist)
-            if (!n.id_setor_ref && n.nao_no_checklist) {
-              score += 100;
-            } else {
-              // Notificação de erro
-              const penalty = n.notified ? -50 : -100;
-              const reward = n.nao_no_checklist ? 100 : 0;
-              score += penalty + reward;
-            }
-          }
-          return score;
-        }, 0);
-
-        const sectorNotifications = notificationsList.filter(n => currentUserSectorObj && n.setor_id === currentUserSectorObj.id);
-        const pendingNotices = sectorNotifications.filter(n => {
-          const status = n.status?.toLowerCase();
-          return !status || ['pending', 'pendente'].includes(status);
-        }).length;
-
-        // Atualizar estados uma única vez para evitar re-renders excessivos
-        setDisputes(pendingList);
-        setStats({
-          ...pmoStats,
-          sectorRank: "1º",
-          sectorMembers: mySectorMembersCount,
-          sectorPoints,
-          userPoints: 0,
-          userNotices: sectorNotifications.length,
-          pendingChecklists: pendingNotices,
-          completionRate: "0%"
-        });
-
-      } catch (error) {
-        console.error("Erro ao carregar dados do dashboard:", error);
-      } finally {
-        setIsLoading(false);
+      if (role !== "pmo" && userSectorId) {
+        nQuery = nQuery.or(`setor_id.eq.${userSectorId},id_setor_ref.eq.${userSectorId}`);
+        sQuery = sQuery.eq('id', userSectorId);
+        mQuery = mQuery.eq('setor_id', userSectorId);
       }
+
+      const [sectorsRes, membersRes, notificationsRes] = await Promise.all([sQuery, mQuery, nQuery]);
+
+      return {
+        sectors: sectorsRes.data || [],
+        members: membersRes.data || [],
+        notifications: notificationsRes.data || []
+      };
+    },
+    staleTime: 1000 * 60 * 2, // 2 minutos de cache
+  });
+
+  // 2. Processamento de Dados via useMemo (Performance de UI)
+  const dashboardStats = useMemo(() => {
+    if (!dashboardData) return {
+      stats: {
+        totalSectors: 0, totalMembers: 0, pendingDisputes: 0, totalPoints: 0,
+        sectorRank: "0º", sectorPoints: 0, sectorMembers: 0, pendingChecklists: 0,
+        completionRate: "0%", userPoints: 0, userNotices: 0
+      },
+      disputes: []
     };
 
-    fetchDashboardData();
-  }, [userSectorId, userSector, role]);
+    const { sectors, members, notifications } = dashboardData;
+
+    const sectorsList = sectors.map((s: any) => ({
+      id: s.id, nome: s.nome,
+      unidade_nome: s.unidade?.nome || 'Nenhuma',
+      manager: s.coordenador?.name || 'Não definido'
+    }));
+
+    const membersList = members.map((u: any) => {
+      const dbRole = String(u.role || '').toLowerCase();
+      let roleLabel = 'collaborator';
+      if (dbRole.includes('coord') || dbRole.includes('manager')) roleLabel = 'manager';
+      else if (dbRole.includes('pmo')) roleLabel = 'pmo';
+
+      return {
+        ...u, role: roleLabel,
+        sector: u.setor?.nome || 'Nenhum',
+        unidade_nome: u.unidade?.nome || 'Nenhuma'
+      };
+    });
+
+    const notificationsList = notifications as any[];
+    const currentUserSectorObj = userSectorId 
+      ? sectorsList.find(s => String(s.id) === String(userSectorId))
+      : sectorsList.find(s => s.nome?.trim().toLowerCase() === userSector?.trim().toLowerCase());
+
+    const pendingDisputesList = notificationsList.filter(n => {
+      const status = n.status?.toLowerCase();
+      return !status || ['disputed', 'contestada', 'pending', 'pendente'].includes(status);
+    });
+
+    const sectorPoints = notificationsList.reduce((acc, n) => {
+      let score = acc;
+      const isTarget = currentUserSectorObj && n.setor_id === currentUserSectorObj.id;
+      const isReporter = currentUserSectorObj && n.id_setor_ref === currentUserSectorObj.id;
+      if (isReporter) score += 50;
+      if (isTarget) {
+        const status = n.status?.toLowerCase();
+        if (status !== 'disputed' && status !== 'rejected') {
+          if (!n.id_setor_ref && n.nao_no_checklist) score += 100;
+          else score += (n.notified ? -50 : -100) + (n.nao_no_checklist ? 100 : 0);
+        }
+      }
+      return score;
+    }, 0);
+
+    const totalSectorNotices = notificationsList.length;
+    const resolvedSectorNotices = notificationsList.filter(n => 
+      ['accepted', 'approved', 'rejected', 'finalizada'].includes(n.status?.toLowerCase())
+    ).length;
+
+    return {
+      stats: {
+        totalSectors: sectorsList.length,
+        totalMembers: membersList.length,
+        pendingDisputes: pendingDisputesList.length,
+        totalPoints: sectorPoints, 
+        sectorRank: "1º", 
+        sectorPoints: sectorPoints,
+        sectorMembers: membersList.length,
+        pendingChecklists: pendingDisputesList.length,
+        completionRate: totalSectorNotices > 0 ? `${Math.round((resolvedSectorNotices / totalSectorNotices) * 100)}%` : "100%",
+        userPoints: sectorPoints,
+        userNotices: pendingDisputesList.length
+      },
+      disputes: pendingDisputesList.map(n => ({
+        id: n.id,
+        reporter: n.setor_ref?.nome || (n.id_setor_ref ? "Setor Desconhecido" : "Sistema"),
+        reported: n.setor?.nome || "Comercial",
+        type: n.notified ? "Alerta" : (n.tipo_erro || "WishList"),
+        description: n.description || n.descricao || "Sem descrição detalhada",
+        date: n.created_at,
+        status: n.status || 'pending'
+      }))
+    };
+  }, [dashboardData, role, userSectorId, userSector]);
+
+  const { stats, disputes } = dashboardStats;
 
   const getSubtitle = () => {
     switch (role) {
@@ -271,7 +193,7 @@ const Dashboard = () => {
         {isLoading ? (
           <div className="flex items-center justify-center p-12">
             <Loader2 className="w-8 h-8 animate-spin text-primary" />
-            <span className="ml-2 text-muted-foreground">Carregando dados reais...</span>
+            <span className="ml-2 text-muted-foreground">Carregando dados...</span>
           </div>
         ) : (
           <>
@@ -400,11 +322,14 @@ const Dashboard = () => {
                                 </div>
                                 <div className="flex items-center gap-2 ml-4">
                                   <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
-                                    <Button size="sm" variant="outline" className="text-success border-success/30 hover:bg-success/10 h-8">
-                                      Aprovar
-                                    </Button>
-                                    <Button size="sm" variant="outline" className="text-destructive border-destructive/30 hover:bg-destructive/10 h-8">
-                                      Rejeitar
+                                    <Button 
+                                      size="sm" 
+                                      variant="outline" 
+                                      className="flex items-center gap-2 hover:bg-primary/10 h-8"
+                                      onClick={() => navigate('/notifications', { state: { highlightId: dispute.id } })}
+                                    >
+                                      <Eye className="w-4 h-4 text-primary" />
+                                      <span>Ver Mais</span>
                                     </Button>
                                   </div>
                                   <ChevronDown className="w-3 h-3 text-muted-foreground transition-transform duration-200 group-data-[state=open]:rotate-180" />
@@ -486,7 +411,7 @@ const Dashboard = () => {
                 </div>
 
             {/* Quick Actions for Manager */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {/* <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <Card className="p-4 border-dashed border-2 hover:border-primary/50 cursor-pointer transition-all group">
                 <div className="flex items-center gap-3">
                   <div className="p-3 rounded-lg bg-primary/10 group-hover:bg-primary/20 transition-colors">
@@ -520,7 +445,7 @@ const Dashboard = () => {
                   </div>
                 </div>
               </Card>
-            </div>
+            </div> */}
 
             {/* Manager Tabs */}
             <Tabs defaultValue="checklist" className="space-y-4">
@@ -528,7 +453,7 @@ const Dashboard = () => {
                 <TabsTrigger value="checklist">Checklist do Setor</TabsTrigger>
                 <TabsTrigger value="team">Equipe</TabsTrigger>
                 <TabsTrigger value="notifications">Notificações</TabsTrigger>
-                <TabsTrigger value="pendencies">Pendências</TabsTrigger>
+                {/* <TabsTrigger value="pendencies">Pendências</TabsTrigger> */}
               </TabsList>
 
               <TabsContent value="checklist" className="space-y-4">
@@ -543,7 +468,7 @@ const Dashboard = () => {
                 <NotificationPanel role="manager" />
               </TabsContent>
 
-              <TabsContent value="pendencies" className="space-y-4">
+              {/* <TabsContent value="pendencies" className="space-y-4">
                 <Card className="p-6">
                   <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
                     <Target className="w-5 h-5 text-warning" />
@@ -579,7 +504,7 @@ const Dashboard = () => {
                     ))}
                   </div>
                 </Card>
-              </TabsContent>
+              </TabsContent> */}
             </Tabs>
           </div>
         )}

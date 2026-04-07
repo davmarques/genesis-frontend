@@ -54,50 +54,56 @@ export const RankingTable = () => {
       }
 
       const { data: notifications } = await query;
+      const notificationsArr = notifications || [];
 
       const now = new Date();
       const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
 
+      // 4. Pré-processar notificações em mapas para evitar filtros O(N^2) no map de setores
+      const statsBySectorMap = new Map();
+
+      notificationsArr.forEach(n => {
+        const isAccepted = n.status === 'accepted' || n.status === 'approved' || !n.status;
+        const createdAt = new Date(n.created_at);
+        const isThisMonth = createdAt >= startOfMonth;
+
+        // Como AUDITOR (quem reportou e ganha pontos)
+        const auditorId = n.id_setor_ref;
+        if (auditorId) {
+          const stats = statsBySectorMap.get(auditorId) || { points: 0, monthlyChange: 0, activities: 0, alertsReceived: 0 };
+          stats.activities += 1;
+          if (isAccepted) {
+            stats.points += 50;
+            if (isThisMonth) stats.monthlyChange += 50;
+          }
+          statsBySectorMap.set(auditorId, stats);
+        }
+
+        // Como AUDITADO (quem recebeu a notificação e perde pontos)
+        const auditeeId = n.setor_id;
+        if (auditeeId) {
+          const stats = statsBySectorMap.get(auditeeId) || { points: 0, monthlyChange: 0, activities: 0, alertsReceived: 0 };
+          stats.alertsReceived += 1;
+          if (isAccepted) {
+            const penalty = n.notified ? -50 : -100;
+            stats.points += penalty;
+            if (isThisMonth) stats.monthlyChange += penalty;
+          }
+          statsBySectorMap.set(auditeeId, stats);
+        }
+      });
+
       const rankingData = sectorsList.map((sector: any, index: number) => {
-        const sectorId = sector.id;
-        
-        // Sumarizar pontos totais - APENAS notificações aceitas ou concluídas
-        const pointsAsAuditor = (notifications || [])
-          .filter(n => n.id_setor_ref === sectorId && (n.status === 'accepted' || n.status === 'approved' || !n.status))
-          .length * 50;
-        
-        const penaltyAsAuditee = (notifications || [])
-          .filter(n => n.setor_id === sectorId && (n.status === 'accepted' || n.status === 'approved' || !n.status))
-          .reduce((acc, n) => acc + (n.notified ? -50 : -100), 0);
-
-        // Calcular variação mensal (pontos ganhos/perdidos no mês atual)
-        const monthlyPointsAsAuditor = (notifications || [])
-          .filter(n => n.id_setor_ref === sectorId && (n.status === 'accepted' || n.status === 'approved' || !n.status) && new Date(n.created_at) >= startOfMonth)
-          .length * 50;
-        
-        const monthlyPenaltyAsAuditee = (notifications || [])
-          .filter(n => n.setor_id === sectorId && (n.status === 'accepted' || n.status === 'approved' || !n.status) && new Date(n.created_at) >= startOfMonth)
-          .reduce((acc, n) => acc + (n.notified ? -50 : -100), 0);
-        
-        const monthlyChange = monthlyPointsAsAuditor + monthlyPenaltyAsAuditee;
-
-        // Total de notificações recebidas (independentemente do tipo)
-        const totalReceived = (notifications || [])
-          .filter(n => n.setor_id === sectorId)
-          .length;
-
-        const activitiesCount = (notifications || [])
-          .filter(n => n.id_setor_ref === sectorId)
-          .length;
+        const stats = statsBySectorMap.get(sector.id) || { points: 0, monthlyChange: 0, activities: 0, alertsReceived: 0 };
 
         return {
           id: index + 1,
           sector: sector.nome,
-          score: 0 + pointsAsAuditor + penaltyAsAuditee,
-          change: monthlyChange,
-          trend: monthlyChange > 0 ? "up" : monthlyChange < 0 ? "down" : "same",
-          activities: activitiesCount,
-          alerts: totalReceived
+          score: stats.points,
+          change: stats.monthlyChange,
+          trend: stats.monthlyChange > 0 ? "up" : stats.monthlyChange < 0 ? "down" : "same",
+          activities: stats.activities,
+          alerts: stats.alertsReceived
         };
       });
 
@@ -155,9 +161,6 @@ export const RankingTable = () => {
           </h3>
           <p className="text-sm text-muted-foreground mt-1">Classificação por pontuação total</p>
         </div>
-        <Badge variant="outline" className="gap-2">
-          Atualizado agora
-        </Badge>
       </div>
 
       <div className="overflow-x-auto">

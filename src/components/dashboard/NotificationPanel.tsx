@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -29,6 +30,7 @@ export const NotificationPanel = ({ role: componentRole }: NotificationPanelProp
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const { role, userSector } = useRole();
+  const navigate = useNavigate();
 
   useEffect(() => {
     fetchNotifications();
@@ -85,13 +87,13 @@ export const NotificationPanel = ({ role: componentRole }: NotificationPanelProp
 
       const formattedData = (data || []).map((n: any) => ({
         id: n.id,
-        type: n.notified ? "alert" : "absence",
+        type: !!n.id_setor_ref ? "wishlist" : (n.notified ? "alert" : "absence"),
         fromSector: n.setor_ref?.nome || "Sistema",
         fromUnidade: n.unidade_ref?.nome || "Geral",
-        toSector: n.setor?.nome || "Auditado",
+        toSector: !!n.id_setor_ref ? "Comercial" : (n.setor?.nome || "Comercial"),
         toUnidade: n.unidade?.nome || "Unidade",
-        description: n.description,
-        points: n.notified ? -50 : -100,
+        description: n.description || n.descricao || "Sem decrição",
+        points: !!n.id_setor_ref ? 50 : (n.notified ? -50 : -100),
         status: n.status || "pending",
         timestamp: n.created_at,
         has_evidence: !!n.upload_url
@@ -146,6 +148,12 @@ export const NotificationPanel = ({ role: componentRole }: NotificationPanelProp
           label: "Pontos de Auditoria", 
           color: "bg-primary/10 text-primary border-primary/30",
           icon: <CheckCircle2 className="w-4 h-4" />
+        };
+      case "wishlist":
+        return {
+          label: "Item de Wishlist", 
+          color: "bg-secondary/10 text-black-foreground border-secondary/30",
+          icon: <FileText className="w-4 h-4" />
         };
       default:
         return { 
@@ -255,7 +263,7 @@ export const NotificationPanel = ({ role: componentRole }: NotificationPanelProp
                   </div>
 
                   <div>
-                    <div className="flex flex-col gap-1.5 mb-2">
+                    <div className="flex flex-col gap-2.5 mb-2">
                        <div className="flex items-center gap-2 text-[10px] font-bold text-muted-foreground uppercase">
                         <span className="bg-muted px-1.5 py-0.5 rounded">De: {notification.fromUnidade} • {notification.fromSector}</span>
                       </div>
@@ -271,55 +279,86 @@ export const NotificationPanel = ({ role: componentRole }: NotificationPanelProp
                       {formatTimestamp(notification.timestamp)}
                     </span>
                     <div className="flex items-center gap-2">
-                      {notification.status === "pending" && 
-                       notification.toSector?.trim().toLowerCase() === userSector.trim().toLowerCase() && (
-                        <div className="flex gap-1">
-                          <Button 
-                            size="sm" 
-                            variant="outline" 
-                            className="h-7 text-[10px] text-success border-success/30 hover:bg-success/10 px-2"
-                            onClick={(e) => { e.stopPropagation(); handleUpdateStatus(notification.id, "accepted"); }}
-                          >
-                            Reconhecer
-                          </Button>
-                          <Button 
-                            size="sm" 
-                            variant="outline" 
-                            className="h-7 text-[10px] text-destructive border-destructive/30 hover:bg-destructive/10 px-2"
-                            onClick={(e) => { e.stopPropagation(); handleUpdateStatus(notification.id, "disputed"); }}
-                          >
-                            Contestar
-                          </Button>
-                        </div>
-                      )}
-                      {notification.status === "disputed" && role === "pmo" && (
-                        <div className="flex gap-1">
-                          <Button 
-                            size="sm" 
-                            variant="outline" 
-                            className="h-7 text-[10px] text-success border-success/30 hover:bg-success/10 px-2"
-                            onClick={(e) => { e.stopPropagation(); handleUpdateStatus(notification.id, "accepted"); }}
-                          >
-                            Aprovar
-                          </Button>
-                          <Button 
-                            size="sm" 
-                            variant="outline" 
-                            className="h-7 text-[10px] text-destructive border-destructive/30 hover:bg-destructive/10 px-2"
-                            onClick={(e) => { e.stopPropagation(); handleUpdateStatus(notification.id, "rejected"); }}
-                          >
-                            Rejeitar
-                          </Button>
-                        </div>
-                      )}
-                      
-                      {notification.has_evidence && (
-                        <Badge variant="outline" className="text-[9px] gap-1 bg-blue-500/5 text-blue-500 border-blue-500/20">
-                          <LinkIcon className="w-2.5 h-2.5" />
-                          Evidência
-                        </Badge>
-                      )}
-                      <Button variant="ghost" size="sm" className="h-7 text-[10px] hover:text-primary" onClick={() => window.location.href='/notifications'}>
+                      <div className="flex items-center gap-2">
+                        {/* Ações para Wishlist (Apenas Comercial) */}
+                        {/* {notification.type === "wishlist" && role === "comercial" && (
+                          <div className="flex gap-1">
+                            <Button 
+                              size="sm" 
+                              variant="outline" 
+                              className="h-7 text-[10px] text-success border-success/30 hover:bg-success/10 px-2"
+                              onClick={(e) => { e.stopPropagation(); handleUpdateStatus(notification.id, "accepted"); }}
+                            >
+                              Aceitar
+                            </Button>
+                            <Button 
+                              size="sm" 
+                              variant="outline" 
+                              className="h-7 text-[10px] text-destructive border-destructive/30 hover:bg-destructive/10 px-2"
+                              onClick={(e) => { e.stopPropagation(); handleUpdateStatus(notification.id, "rejected"); }}
+                            >
+                              Rejeitar
+                            </Button>
+                          </div>
+                        )} */}
+
+                        {/* Ações para Sistema (Ocorrências do próprio setor) */}
+                        {/* {notification.status === "pending" && 
+                         notification.type !== "wishlist" &&
+                         notification.toSector?.trim().toLowerCase() === userSector.trim().toLowerCase() && (
+                          <div className="flex gap-1">
+                            <Button 
+                              size="sm" 
+                              variant="outline" 
+                              className="h-7 text-[10px] text-success border-success/30 hover:bg-success/10 px-2"
+                              onClick={(e) => { e.stopPropagation(); handleUpdateStatus(notification.id, "accepted"); }}
+                            >
+                              Reconhecer
+                            </Button>
+                            <Button 
+                              size="sm" 
+                              variant="outline" 
+                              className="h-7 text-[10px] text-destructive border-destructive/30 hover:bg-destructive/10 px-2"
+                              onClick={(e) => { e.stopPropagation(); handleUpdateStatus(notification.id, "disputed"); }}
+                            >
+                              Contestar
+                            </Button>
+                          </div>
+                        )} */}
+
+                        {/* {notification.status === "disputed" && role === "pmo" && notification.type !== "wishlist" && (
+                          <div className="flex gap-1">
+                            <Button 
+                              size="sm" 
+                              variant="outline" 
+                              className="h-7 text-[10px] text-success border-success/30 hover:bg-success/10 px-2"
+                              onClick={(e) => { e.stopPropagation(); handleUpdateStatus(notification.id, "accepted"); }}
+                            >
+                              Aprovar
+                            </Button>
+                            <Button 
+                              size="sm" 
+                              variant="outline" 
+                              className="h-7 text-[10px] text-destructive border-destructive/30 hover:bg-destructive/10 px-2"
+                              onClick={(e) => { e.stopPropagation(); handleUpdateStatus(notification.id, "rejected"); }}
+                            >
+                              Rejeitar
+                            </Button>
+                          </div>
+                        )} */}
+                      </div>
+                      <Button 
+                        variant="ghost" 
+                        size="sm" 
+                        className="h-7 text-[14px] hover:text-white" 
+                        onClick={() => {
+                          if (notification.type === "wishlist") {
+                            navigate(`/checklists?id=${notification.id}`);
+                          } else {
+                            navigate(`/notifications?id=${notification.id}`);
+                          }
+                        }}
+                      >
                         Detalhes
                       </Button>
                     </div>
